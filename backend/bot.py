@@ -197,14 +197,37 @@ async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_
         payload["image_url"] = image_url
 
     try:
-        # Chain .select() to retrieve created row
-        response = supabase.table("grievances").insert(payload).select().execute()
-        inserted_record = response.data[0] if (response.data and len(response.data) > 0) else {}
-        grievance_id = inserted_record.get("id", "Submitted")
-
-        await update.message.reply_text(
-            f"✅ Grievance submitted successfully!\nTracking ID: #{grievance_id}"
-        )
+        import httpx
+        
+        # We route through our own API to get AI categorization, score, and deduplication applied
+        api_url = os.getenv("API_URL", "http://127.0.0.1:8000")
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{api_url}/grievances",
+                json={
+                    "title": "Telegram Image Report" if image_url else "Telegram Report",
+                    "description": description,
+                    "latitude": lat,
+                    "longitude": lon,
+                    "image_url": image_url,
+                    "chat_id": str(chat_id)
+                },
+                timeout=15.0
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+        grievance_id = data.get("tracking_id", "Submitted")
+        
+        if data.get("status") == "duplicate_merged":
+            await update.message.reply_text(
+                f"✅ {data.get('message', 'Similar report exists and has been merged.')}\nTracking ID: {grievance_id}"
+            )
+        else:
+            await update.message.reply_text(
+                f"✅ Grievance submitted successfully!\nTracking ID: {grievance_id}"
+            )
 
         asyncio.create_task(dispatch_webhook_alert({
             "event": "NEW_GRIEVANCE",
@@ -217,7 +240,7 @@ async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_
         }))
 
     except Exception as e:
-        logger.error(f"Error persisting grievance: {e}", exc_info=True)
+        logger.error(f"Error persisting grievance via API: {e}", exc_info=True)
         await update.message.reply_text(f"An error occurred while saving your report: {str(e)[:100]}")
 
 # ---------------------------------------------------------------------------
