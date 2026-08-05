@@ -283,13 +283,45 @@ async def _keep_alive_ping(app_url: str):
             await asyncio.sleep(240)
 
 
+def _run_bot_forever(bot_path: Path, env: dict, log_func):
+    """Run bot subprocess and automatically restart if it crashes (e.g. 409 Conflict during zero-downtime deploys)."""
+    python_exe = sys.executable or "python"
+    cmd = [python_exe, "-u", str(bot_path)]
+    while True:
+        try:
+            log_func("Starting bot.py subprocess...")
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(bot_path.parent),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env,
+                text=True,
+                bufsize=1
+            )
+            # Stream output
+            for line in iter(proc.stdout.readline, ''):
+                if line:
+                    log_func(f"[bot.py] {line.strip()}")
+            proc.wait()
+            log_func(f"Bot subprocess exited with code {proc.returncode}. Restarting in 15 seconds...")
+        except Exception as e:
+            log_func(f"Exception in bot runner loop: {e}")
+            
+        import time
+        time.sleep(15)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for keep-alive."""
     app.state.bot_process = None
     
-    # We no longer spawn bot.py here to prevent Telegram 409 Conflict 
-    # since it is being run as a dedicated Background Worker in production.
+    bot_path = backend_dir / "bot.py"
+    if bot_path.exists():
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(backend_dir)
+        threading.Thread(target=_run_bot_forever, args=(bot_path, env, logger.info), daemon=True).start()
+        logger.info("Bot auto-restart thread initialized.")
 
     render_url = normalize_env_value(os.getenv("RENDER_EXTERNAL_URL"))
     ping_task = None
