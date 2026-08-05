@@ -1,0 +1,6 @@
+id,tracking_id,title,category,urgency_score,status,latitude,longitude,created_at,updated_at,image_url
+"e7f2c8c2-178d-4591-93be-4dfe231e6e5c","","Road Infrastructure Grievance","Roads & Traffic","4","Resolved","26.515884","88.69708","2026-08-04T16:37:08.319365+00:00","","https://hjojcxwjtwwxclpcyzne.supabase.co/storage/v1/object/public/grievance-images/grievance_8329187453_1785861377.jpg"
+"245f95a8-7213-44ea-970f-7d8b79a1ee76","","sdfsfdfs","Water & Sewage","3","Resolved","26.512411","88.697678","2026-08-05T03:13:19.030831+00:00","",""
+"5819285c-4c7e-4e0c-88dc-2f9644e7c383","","fsfdds","General","2","Pending","26.512411","88.697678","2026-08-05T03:41:30.309708+00:00","","https://hjojcxwjtwwxclpcyzne.supabase.co/storage/v1/object/public/grievance-images/grievance_1785901286381_ujhnif.jpg"
+"d09f47d1-30cb-48ce-89ac-f74e0b7d4c47","","fdsakjfsakjaf","Electricity","3","Pending","26.512411","88.697678","2026-08-05T03:44:56.79935+00:00","",""
+"24c6080c-8fed-4e9d-9dd1-7b0751d758ac","","Road Infrastructure Grievance","Roads & Traffic","4","In Progress","26.511402","88.697282","2026-08-04T16:14:16.982897+00:00","","https://hjojcxwjtwwxclpcyzne.supabase.co/storage/v1/object/public/grievance-images/grievance_8329187453_1785860045.jpg"

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Outer Gold Civic Emblem Circle -->
+  <circle cx="50" cy="50" r="46" fill="#03254c" stroke="#d4af37" stroke-width="5" />
+  
+  <!-- Inner Gold Ring -->
+  <circle cx="50" cy="50" r="38" fill="none" stroke="#d4af37" stroke-width="2" stroke-dasharray="3,3" />
+
+  <!-- Megaphone / Announcement Icon (Jan Pukar) -->
+  <path d="M30 45 L42 45 L62 30 L62 70 L42 55 L30 55 Z" fill="#ffffff" />
+  <path d="M66 40 C70 45, 70 55, 66 60" stroke="#d4af37" stroke-width="4" stroke-linecap="round" fill="none" />
+  <path d="M72 34 C78 43, 78 57, 72 66" stroke="#ffffff" stroke-width="3" stroke-linecap="round" fill="none" />
+  
+  <!-- Base Support Line -->
+  <path d="M42 55 L40 70 L35 70 L38 55 Z" fill="#d4af37" />
+</svg>
