@@ -10,6 +10,7 @@ alongside it.
 """
 
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
 from dotenv import load_dotenv
@@ -48,6 +49,8 @@ supabase_key = normalize_env_value(
 supabase_cluster_id = normalize_env_value(
     os.getenv("SUPABASE_CLUSTER_ID") or os.getenv("NEXT_PUBLIC_SUPABASE_CLUSTER_ID") or os.getenv("DEFAULT_CLUSTER_ID")
 )
+
+frontend_url = normalize_env_value(os.getenv("FRONTEND_URL") or os.getenv("NEXT_PUBLIC_FRONTEND_URL") or os.getenv("NEXT_PUBLIC_VERCEL_URL"))
 
 if not supabase_url or not supabase_key:
     raise ValueError(
@@ -115,6 +118,21 @@ async def readiness():
         "status": "ok" if cluster_id else "degraded",
         "cluster_id": cluster_id,
     }
+
+
+@app.get("/")
+async def root():
+    """Root handler: redirect to frontend if `FRONTEND_URL` is set, otherwise
+    return a minimal JSON status to confirm the API is live and indicate
+    whether the bot subprocess has been spawned.
+    """
+    # Redirect to frontend if configured
+    if frontend_url:
+        return RedirectResponse(frontend_url)
+
+    bot_proc = getattr(app.state, "bot_process", None)
+    bot_pid = getattr(bot_proc, "pid", None) if bot_proc else None
+    return JSONResponse({"service": "JanPukar API", "status": "running", "bot_pid": bot_pid})
 
 
 # ---------------------------------------------------------------------------
