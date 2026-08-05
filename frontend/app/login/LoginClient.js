@@ -28,64 +28,79 @@ export default function LoginClient() {
   }
 
   return (
-    <div className="max-w-md mx-auto mt-8 p-6 bg-white rounded shadow">
-      <h2 id="login-title" className="text-xl font-semibold mb-4">Admin Access</h2>
-      <p className="text-sm text-gray-600 mb-4">
-        Enter the registered administrator email and password to access the admin dashboard.
-      </p>
-      <form onSubmit={handleSubmit} className="space-y-4" aria-labelledby="login-title">
-        <div>
-          <label htmlFor="login-email" className="block text-sm font-medium">Admin Email</label>
-          <input
-            id="login-email"
-            name="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            required
-            autoFocus
-            aria-required="true"
-            className="mt-1 block w-full border rounded px-3 py-2"
-          />
+    <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px' }}>
+      <div className="glass-panel animate-fade-in-up" style={{ width: '100%', maxWidth: '420px', padding: '32px' }}>
+        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+          <h2 id="login-title" style={{ fontSize: '1.75rem', fontWeight: 800, marginBottom: '8px' }}>
+            Control Room <span className="gradient-text">Login</span>
+          </h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+            Enter your administrator credentials to access the JanPukar dashboard.
+          </p>
         </div>
 
-        <div>
-          <label htmlFor="login-password" className="block text-sm font-medium">Password</label>
-          <input
-            id="login-password"
-            name="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Enter your admin password"
-            className="mt-1 block w-full border rounded px-3 py-2"
-            aria-describedby="login-password-desc"
-            required
-          />
-          <div id="login-password-desc" className="text-xs text-gray-500">This system is restricted to administrators only.</div>
-        </div>
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }} aria-labelledby="login-title">
+          <div>
+            <label htmlFor="login-email" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
+              Admin Email
+            </label>
+            <input
+              id="login-email"
+              name="email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+              autoFocus
+              aria-required="true"
+              className="input-dark"
+              placeholder="admin@janpukar.gov"
+            />
+          </div>
 
-        {error && <div role="alert" className="text-red-600">{error}</div>}
+          <div>
+            <label htmlFor="login-password" style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px' }}>
+              Password
+            </label>
+            <input
+              id="login-password"
+              name="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="input-dark"
+              aria-describedby="login-password-desc"
+              required
+            />
+          </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="submit"
-            disabled={loading}
-            aria-disabled={loading}
-            className="bg-blue-600 text-white px-4 py-2 rounded"
-          >
-            {loading ? "Signing in…" : "Sign in"}
-          </button>
-          <button
-            type="button"
-            onClick={() => { setEmail(""); setPassword(""); setError(""); }}
-            className="text-sm text-gray-600"
-          >
-            Clear
-          </button>
-        </div>
-      </form>
-      <p className="text-xs text-gray-500 mt-4">Only approved administrators can access this system.</p>
+          {error && (
+            <div role="alert" style={{
+              padding: '12px 16px', borderRadius: '8px', background: 'rgba(244, 63, 94, 0.1)',
+              border: '1px solid rgba(244, 63, 94, 0.3)', color: '#fb7185', fontSize: '0.85rem', textAlign: 'center',
+            }}>
+              {error}
+            </div>
+          )}
+
+          <div style={{ marginTop: '8px' }}>
+            <button
+              type="submit"
+              disabled={loading}
+              aria-disabled={loading}
+              className="btn-primary"
+              style={{ width: '100%', padding: '14px', fontSize: '1rem', opacity: loading ? 0.7 : 1 }}
+            >
+              {loading ? "Authenticating..." : "Sign in to Dashboard"}
+            </button>
+          </div>
+        </form>
+
+        <p style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.75rem', marginTop: '24px' }}>
+          This system is restricted to authorized municipal personnel only.
+        </p>
+      </div>
     </div>
   );
 }

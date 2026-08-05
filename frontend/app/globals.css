@@ -1,5 +1,5 @@
-@import "tailwindcss";
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
 
 :root {
   --bg-primary: #0a0e1a;
@@ -32,7 +32,9 @@
 }
 
 /* Reset & Base */
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+}
 
 html {
   font-size: 16px;
@@ -176,9 +178,17 @@ body {
 }
 
 /* Status Colors */
-.status-pending { color: #f43f5e; }
-.status-in-progress { color: #f59e0b; }
-.status-resolved { color: #10b981; }
+.status-pending {
+  color: #f43f5e;
+}
+
+.status-in-progress {
+  color: #f59e0b;
+}
+
+.status-resolved {
+  color: #10b981;
+}
 
 .status-badge {
   display: inline-flex;
@@ -212,39 +222,85 @@ body {
 
 /* Animations */
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(30px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @keyframes slideDown {
-  from { opacity: 0; transform: translateY(-10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @keyframes pulseGlow {
-  0%, 100% { box-shadow: 0 0 15px var(--glow-emerald); }
-  50% { box-shadow: 0 0 30px var(--glow-emerald), 0 0 60px rgba(16, 185, 129, 0.15); }
+
+  0%,
+  100% {
+    box-shadow: 0 0 15px var(--glow-emerald);
+  }
+
+  50% {
+    box-shadow: 0 0 30px var(--glow-emerald), 0 0 60px rgba(16, 185, 129, 0.15);
+  }
 }
 
 @keyframes shimmer {
-  0% { background-position: -200% center; }
-  100% { background-position: 200% center; }
+  0% {
+    background-position: -200% center;
+  }
+
+  100% {
+    background-position: 200% center;
+  }
 }
 
 @keyframes float {
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-8px); }
+
+  0%,
+  100% {
+    transform: translateY(0px);
+  }
+
+  50% {
+    transform: translateY(-8px);
+  }
 }
 
 @keyframes gradientShift {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+  0% {
+    background-position: 0% 50%;
+  }
+
+  50% {
+    background-position: 100% 50%;
+  }
+
+  100% {
+    background-position: 0% 50%;
+  }
 }
 
 .animate-fade-in-up {
@@ -267,11 +323,25 @@ body {
   animation: float 4s ease-in-out infinite;
 }
 
-.delay-100 { animation-delay: 0.1s; }
-.delay-200 { animation-delay: 0.2s; }
-.delay-300 { animation-delay: 0.3s; }
-.delay-400 { animation-delay: 0.4s; }
-.delay-500 { animation-delay: 0.5s; }
+.delay-100 {
+  animation-delay: 0.1s;
+}
+
+.delay-200 {
+  animation-delay: 0.2s;
+}
+
+.delay-300 {
+  animation-delay: 0.3s;
+}
+
+.delay-400 {
+  animation-delay: 0.4s;
+}
+
+.delay-500 {
+  animation-delay: 0.5s;
+}
 
 /* Card Hover */
 .card-hover {
@@ -311,8 +381,14 @@ textarea:focus-visible {
   outline-offset: 2px;
 }
 
-a { text-underline-offset: 2px; }
-button, a[role="button"] { cursor: pointer; }
+a {
+  text-underline-offset: 2px;
+}
+
+button,
+a[role="button"] {
+  cursor: pointer;
+}
 
 /* Leaflet overrides for dark theme */
 .leaflet-popup-content-wrapper {

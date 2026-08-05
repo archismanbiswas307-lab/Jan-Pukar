@@ -4,7 +4,6 @@ import { useEffect, useState, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { supabase } from "../../lib/supabase";
 
-// Go up two levels (../../) to reach root 'components'
 const AdminMap = dynamic(() => import("../../components/Map"), {
   ssr: false,
   loading: () => (
@@ -12,7 +11,7 @@ const AdminMap = dynamic(() => import("../../components/Map"), {
       <div className="flex flex-col items-center gap-3">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent"></div>
         <p className="text-sm font-medium tracking-wide">
-          Initializing JanPukar Control Room Map...
+          Initializing Command Center...
         </p>
       </div>
     </div>
@@ -23,142 +22,60 @@ export default function AdminPage() {
   const [grievances, setGrievances] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Filters
   const [selectedCategory, setSelectedCategory] = useState("All");
-  const [selectedUrgency, setSelectedUrgency] = useState("All");
-  const [realtimeFallback, setRealtimeFallback] = useState(false);
-
-  const stats = useMemo(() => {
-    const total = grievances.length;
-    const highUrgency = grievances.filter(
-      (g) => (g.urgency_score || 1) >= 4
-    ).length;
-
-    const categories = grievances.reduce((acc, curr) => {
-      const cat = curr.category || "Unassigned";
-      acc[cat] = (acc[cat] || 0) + 1;
-      return acc;
-    }, {});
-
-    return { total, highUrgency, categories };
-  }, [grievances]);
-
-  const avgResolutionHours = useMemo(() => {
-    const resolved = grievances.filter((g) => g.status === "Resolved" && g.created_at && g.updated_at);
-    if (!resolved.length) return null;
-    const diffs = resolved.map((r) => (new Date(r.updated_at).getTime() - new Date(r.created_at).getTime()) / (1000 * 60 * 60));
-    const avg = diffs.reduce((a, b) => a + b, 0) / diffs.length;
-    return avg;
-  }, [grievances]);
-
-  const handleExportCSV = async () => {
-    try {
-      const { data, error } = await supabase.from("grievances").select("*");
-      if (error) throw error;
-      const rows = data || [];
-      const headers = ["id","tracking_id","title","category","urgency_score","status","latitude","longitude","created_at","updated_at","image_url"];
-      const csv = [headers.join(",")].concat(rows.map(r => headers.map(h => (""+ (r[h] ?? "")).replace(/"/g,'""')).map(v => `"${v}"`).join(","))).join("\n");
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `janpukar_grievances_${Date.now()}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error("Export failed", err);
-      setError("Failed to export CSV.");
-    }
-  };
-
-  const visibleCategories = useMemo(() => {
-    const categories = Object.keys(stats.categories || {}).sort((a, b) =>
-      a.localeCompare(b)
-    );
-    return ["All", ...categories];
-  }, [stats.categories]);
-
-  const visibleGrievances = useMemo(() => {
-    return grievances.filter((item) => {
-      const urgency = Number(item.urgency_score || 1);
-      const matchesCategory =
-        selectedCategory === "All" ||
-        (item.category || "General") === selectedCategory;
-      const matchesUrgency =
-        selectedUrgency === "All" ||
-        (selectedUrgency === ">=4" && urgency >= 4) ||
-        (selectedUrgency === ">=2" && urgency >= 2);
-
-      return matchesCategory && matchesUrgency;
-    });
-  }, [grievances, selectedCategory, selectedUrgency]);
+  const [selectedStatus, setSelectedStatus] = useState("All");
+  const [selectedId, setSelectedId] = useState(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
-    let intervalId;
 
-    const fetchGrievances = async (showLoading = false) => {
+    // Fetch initial
+    const fetchGrievances = async () => {
       try {
-        if (showLoading) setLoading(true);
+        setLoading(true);
         const { data, error: fetchError } = await supabase
           .from("grievances")
           .select("*")
           .order("created_at", { ascending: false });
 
         if (fetchError) throw fetchError;
-
         if (isMounted) {
           setGrievances(data || []);
           setError(null);
-          setRealtimeFallback(false);
         }
       } catch (err) {
-        const message = err?.message || "Unable to sync reports.";
-        console.error("Supabase fetch error:", message);
-        if (isMounted) {
-          setError(message);
-          setRealtimeFallback(true);
-        }
+        console.error("Supabase fetch error:", err);
+        if (isMounted) setError(err.message || "Failed to load data");
       } finally {
         if (isMounted) setLoading(false);
       }
     };
 
-    fetchGrievances(true);
+    fetchGrievances();
 
-    intervalId = window.setInterval(() => {
-      fetchGrievances(false);
-    }, 20000);
-
+    // Subscribe to realtime
     const channel = supabase
-      .channel("realtime-grievances-admin")
+      .channel("admin-realtime")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "grievances" },
         (payload) => {
           if (payload.eventType === "INSERT") {
-            setGrievances((prev) => [payload.new, ...prev]);
+            setGrievances(prev => [payload.new, ...prev]);
           } else if (payload.eventType === "UPDATE") {
-            setGrievances((prev) =>
-              prev.map((item) => (item.id === payload.new.id ? payload.new : item))
-            );
-          } else if (payload.eventType === "DELETE") {
-            setGrievances((prev) => prev.filter((item) => item.id !== payload.old.id));
+            setGrievances(prev => prev.map(g => g.id === payload.new.id ? payload.new : g));
           }
         }
       )
-      .subscribe((status, err) => {
-        if (status === "SUBSCRIBED") {
-          setRealtimeFallback(false);
-        } else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || err) {
-          setRealtimeFallback(true);
-        }
+      .subscribe((status) => {
+        setRealtimeConnected(status === "SUBSCRIBED");
       });
 
     return () => {
       isMounted = false;
-      clearInterval(intervalId);
       supabase.removeChannel(channel);
     };
   }, []);
@@ -172,123 +89,219 @@ export default function AdminPage() {
         .select();
 
       if (error) throw error;
-      if (!data || data.length === 0) {
-        throw new Error(`Grievance with ID ${id} not found or could not be updated.`);
+      if (data && data.length > 0) {
+        setGrievances((prev) => prev.map((item) => (item.id === id ? data[0] : item)));
       }
-      setGrievances((prev) => prev.map((item) => (item.id === id ? data[0] : item)));
-      setError(null);
     } catch (err) {
-      const message = err?.message || "Unable to update status.";
-      console.error("Failed to update status:", message);
-      setError(message);
+      console.error("Failed to update status:", err);
+      alert("Failed to update: " + err.message);
     }
   };
 
+  const handleExportCSV = () => {
+    try {
+      const headers = ["ID", "Tracking_ID", "Status", "Category", "Urgency", "Description", "Latitude", "Longitude", "Created"];
+      const rows = grievances.map(g => [
+        g.id, g.tracking_id || '', g.status || 'Pending', g.category || '', g.urgency_score || 1,
+        `"${(g.description || '').replace(/"/g, '""')}"`, g.latitude || '', g.longitude || '', g.created_at || ''
+      ]);
+      const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `JanPukar_Export_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Export error", e);
+    }
+  };
+
+  const stats = useMemo(() => {
+    const total = grievances.length;
+    const pending = grievances.filter(g => (g.status || 'pending').toLowerCase() === 'pending').length;
+    const critical = grievances.filter(g => (g.urgency_score || 1) >= 4 && (g.status || 'pending').toLowerCase() !== 'resolved').length;
+    return { total, pending, critical };
+  }, [grievances]);
+
+  const visibleCategories = ["All", ...Array.from(new Set(grievances.map(g => g.category || "General"))).sort()];
+  const STATUS_FILTERS = ["All", "Pending", "In Progress", "Resolved"];
+
+  const filteredGrievances = useMemo(() => {
+    return grievances.filter(g => {
+      const catMatch = selectedCategory === "All" || g.category === selectedCategory;
+      const statMatch = selectedStatus === "All" || (g.status || "Pending").toLowerCase() === selectedStatus.toLowerCase();
+      return catMatch && statMatch;
+    }).sort((a, b) => {
+      // Sort by urgency desc, then date desc
+      const uA = a.urgency_score || 1;
+      const uB = b.urgency_score || 1;
+      if (uA !== uB) return uB - uA;
+      return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+    });
+  }, [grievances, selectedCategory, selectedStatus]);
+
+  const getStatusColor = (status) => {
+    const s = (status || "").toLowerCase();
+    if (s === "resolved") return "#10b981";
+    if (s === "in progress" || s === "in_progress") return "#f59e0b";
+    return "#f43f5e";
+  };
+
   return (
-    <main className="relative h-screen w-full overflow-hidden bg-gray-900">
-      <div className="absolute top-4 left-14 right-4 z-[1000] flex flex-wrap items-center justify-between gap-4 pointer-events-none">
-        <div className="pointer-events-auto bg-slate-900/70 backdrop-blur-md px-4 py-3 rounded-xl shadow-xl border border-slate-700/50 text-white/90">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
-            </span>
-            <h1 className="text-base font-bold tracking-tight">
-              JanPukar Control Room
-            </h1>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            AI-Deduplicated Live Municipal Heatmap
-          </p>
+    <div style={{ display: 'flex', height: 'calc(100vh - 60px)', background: 'var(--bg-primary)', overflow: 'hidden' }}>
 
-          <div className="mt-3 flex flex-wrap gap-2">
-            {visibleCategories.map((category) => (
-              <button
-                key={category}
-                type="button"
-                onClick={() => setSelectedCategory(category)}
-                className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${
-                  selectedCategory === category
-                    ? "border-emerald-400 bg-emerald-500/16 text-emerald-300/90"
-                    : "border-slate-700 bg-slate-800/60 text-slate-300/85"
-                }`}
-              >
-                {category}
-              </button>
-            ))}
+      {/* Left Sidebar - Triage Queue */}
+      <div style={{
+        width: '450px', display: 'flex', flexDirection: 'column',
+        borderRight: '1px solid rgba(148, 163, 184, 0.1)', background: 'var(--bg-secondary)',
+        zIndex: 10,
+      }}>
+        {/* Header & Stats */}
+        <div style={{ padding: '24px', borderBottom: '1px solid rgba(148, 163, 184, 0.1)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <h1 style={{ fontSize: '1.25rem', fontWeight: 800 }}>Triage Queue</h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{
+                width: '8px', height: '8px', borderRadius: '50%',
+                background: realtimeConnected ? '#10b981' : '#f59e0b',
+                boxShadow: realtimeConnected ? '0 0 8px #10b981' : 'none',
+              }} />
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                {realtimeConnected ? 'LIVE' : 'SYNCING'}
+              </span>
+            </div>
           </div>
 
-          <div className="mt-2 flex flex-wrap gap-2">
-            { [
-              { label: "All", value: "All" },
-              { label: "High (>=4)", value: ">=4" },
-              { label: "Medium (>=2)", value: ">=2" },
-            ].map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => setSelectedUrgency(option.value)}
-                className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${
-                  selectedUrgency === option.value
-                    ? "border-rose-400 bg-rose-500/20 text-rose-300"
-                    : "border-slate-700 bg-slate-800/80 text-slate-300"
-                }`}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '20px' }}>
+            <div style={{ background: 'rgba(15,23,42,0.5)', padding: '12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Total</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{stats.total}</div>
+            </div>
+            <div style={{ background: 'rgba(244,63,94,0.1)', padding: '12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '0.7rem', color: '#fb7185', textTransform: 'uppercase', fontWeight: 600 }}>Pending</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fb7185' }}>{stats.pending}</div>
+            </div>
+            <div style={{ background: 'rgba(245,158,11,0.1)', padding: '12px', borderRadius: '10px' }}>
+              <div style={{ fontSize: '0.7rem', color: '#fbbf24', textTransform: 'uppercase', fontWeight: 600 }}>Critical</div>
+              <div style={{ fontSize: '1.2rem', fontWeight: 700, color: '#fbbf24' }}>{stats.critical}</div>
+            </div>
+          </div>
+
+          {/* Filters */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div>
+              <select
+                value={selectedStatus}
+                onChange={e => setSelectedStatus(e.target.value)}
+                className="input-dark" style={{ padding: '8px 12px', fontSize: '0.85rem' }}
               >
-                {option.label}
-              </button>
-            ))}
+                {STATUS_FILTERS.map(f => (
+                  <option key={f} value={f}>{f} Status</option>
+                ))}
+              </select>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '4px' }}>
+              {visibleCategories.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  style={{
+                    padding: '4px 12px', borderRadius: '16px', fontSize: '0.75rem', fontWeight: 600,
+                    whiteSpace: 'nowrap', border: '1px solid',
+                    background: selectedCategory === cat ? 'rgba(16,185,129,0.1)' : 'transparent',
+                    color: selectedCategory === cat ? '#10b981' : 'var(--text-muted)',
+                    borderColor: selectedCategory === cat ? 'rgba(16,185,129,0.3)' : 'rgba(148,163,184,0.2)',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="pointer-events-auto flex items-center gap-2 bg-slate-900/70 backdrop-blur-md p-2 rounded-xl border border-slate-700/50 shadow-xl text-white/90 text-xs">
-          <div className="px-3 py-1.5 bg-slate-800/80 rounded-lg">
-            <span className="text-slate-400 text-[10px] block uppercase font-semibold">
-              Total Reports
-            </span>
-            <span className="text-sm font-bold">{stats.total}</span>
-          </div>
+        {/* List */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {loading && <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>Loading records...</div>}
 
-          <div className="px-3 py-1.5 bg-rose-500/10 border border-rose-500/30 rounded-lg text-rose-400/90">
-            <span className="text-rose-400/70 text-[10px] block uppercase font-semibold">
-              High Urgency
-            </span>
-            <span className="text-sm font-bold">{stats.highUrgency}</span>
-          </div>
-
-          <div className="px-2 py-1.5 text-[11px] rounded-lg bg-slate-800/80 text-slate-300/85">
-            {realtimeFallback ? "Fallback sync" : "Live sync"}
-          </div>
-
-          <button onClick={handleExportCSV} className="px-3 py-1 rounded bg-slate-700/60 text-[11px] hover:bg-slate-700">Export CSV</button>
-
-          {avgResolutionHours !== null && (
-            <div className="px-3 py-1.5 bg-slate-800 rounded-lg text-[11px]">
-              <span className="text-slate-400 text-[10px] block uppercase">Avg Resolution</span>
-              <span className="text-sm font-bold">{avgResolutionHours.toFixed(1)} hrs</span>
+          {!loading && filteredGrievances.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
+              No reports match current filters.
             </div>
           )}
 
-          {loading && (
-            <div className="px-2 text-slate-400 text-[11px] animate-pulse">
-              Syncing...
+          {filteredGrievances.map(g => (
+            <div
+              key={g.id}
+              onClick={() => setSelectedId(g.id)}
+              className="card-hover"
+              style={{
+                background: selectedId === g.id ? 'rgba(30,41,59,0.8)' : 'rgba(15,23,42,0.6)',
+                border: '1px solid',
+                borderColor: selectedId === g.id ? 'var(--accent-emerald)' : 'rgba(148,163,184,0.1)',
+                borderRadius: '12px', padding: '16px', cursor: 'pointer',
+                position: 'relative', overflow: 'hidden'
+              }}
+            >
+              {/* Urgency Line indicator */}
+              <div style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '4px', background: getStatusColor(g.status) }} />
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontSize: '0.7rem', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>
+                  {g.tracking_id || `#${g.id}`} • {new Date(g.created_at).toLocaleDateString()}
+                </span>
+                <span style={{
+                  fontSize: '0.7rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px',
+                  background: (g.urgency_score || 1) >= 4 ? 'rgba(244,63,94,0.1)' : 'transparent',
+                  color: (g.urgency_score || 1) >= 4 ? '#fb7185' : 'var(--text-secondary)'
+                }}>
+                  U-{g.urgency_score || 1}
+                </span>
+              </div>
+
+              <h3 style={{ fontSize: '1rem', fontWeight: 600, marginBottom: '4px', width: '90%', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {g.title || "Report"}
+              </h3>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '12px' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: '10px' }}>
+                  {g.category}
+                </span>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: getStatusColor(g.status) }}>
+                  {g.status || "Pending"}
+                </span>
+              </div>
+
+              {g.report_count > 1 && (
+                <div style={{ marginTop: '12px', fontSize: '0.7rem', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  ⚠️ Duplicates Merged ({g.report_count})
+                </div>
+              )}
             </div>
-          )}
+          ))}
+        </div>
+
+        {/* Footer actions */}
+        <div style={{ padding: '16px', borderTop: '1px solid rgba(148, 163, 184, 0.1)' }}>
+          <button
+            onClick={handleExportCSV}
+            className="btn-secondary"
+            style={{ width: '100%', fontSize: '0.8rem', padding: '10px' }}
+          >
+            Download CSV Export
+          </button>
         </div>
       </div>
 
-      {error && (
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-[1000] bg-rose-600 text-white text-xs px-4 py-2 rounded-lg shadow-lg">
-          Failed to fetch reports: {error}
-        </div>
-      )}
+      {/* Right Map View */}
+      <div style={{ flex: 1, position: 'relative' }}>
+        <AdminMap grievances={filteredGrievances} onStatusChange={handleStatusChange} selectedId={selectedId} />
+      </div>
 
-      {visibleGrievances.length === 0 && !loading && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 z-[1000] bg-slate-800/90 text-slate-200 text-xs px-4 py-2 rounded-lg border border-slate-700 shadow-lg">
-          No reports match the current filters.
-        </div>
-      )}
-
-      <AdminMap grievances={visibleGrievances} onStatusChange={handleStatusChange} />
-    </main>
+    </div>
   );
 }

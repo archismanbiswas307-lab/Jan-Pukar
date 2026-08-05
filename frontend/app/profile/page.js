@@ -26,12 +26,12 @@ export default function ProfilePage() {
 
       try {
         const userId = currentSession.user.id;
-        const { data: prof, error } = await supabase
+        const { data: prof, error: profErr } = await supabase
           .from("profiles")
           .select("id, email, telegram_chat_id")
           .eq("id", userId)
           .single();
-        if (error) throw error;
+        if (profErr) throw profErr;
         if (mounted) setProfile(prof);
       } catch (err) {
         if (mounted) setError(err);
@@ -45,39 +45,51 @@ export default function ProfilePage() {
     };
   }, [router]);
 
-  if (loading) return <div className="p-8">Loading…</div>;
-  if (error)
+  if (loading) return <div style={{ minHeight: '100vh', background: 'var(--bg-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)' }}>Loading session...</div>;
+
+  if (error) {
     return (
-      <main className="min-h-screen p-8">
-        <div className="max-w-2xl mx-auto">
-          <h1 className="text-2xl font-semibold mb-4">Profile</h1>
-          <p className="text-sm text-red-600">Error loading profile: {error.message}</p>
+      <main style={{ minHeight: '100vh', background: 'var(--bg-primary)', padding: '40px 16px' }}>
+        <div style={{ maxWidth: '640px', margin: '0 auto' }}>
+          <h1 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '24px' }}>Profile Error</h1>
+          <div style={{ padding: '24px', background: 'rgba(244, 63, 94, 0.1)', border: '1px solid rgba(244, 63, 94, 0.3)', borderRadius: '12px', color: '#fb7185' }}>
+            {error.message}
+          </div>
         </div>
       </main>
     );
+  }
 
   const userId = session.user.id;
   const deepLink = `https://t.me/JanPukarBot?start=${encodeURIComponent(userId)}`;
 
   return (
-    <main className="min-h-screen p-8 bg-gray-50">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-2xl font-semibold mb-4">Profile</h1>
+    <main style={{ minHeight: '100vh', background: 'var(--bg-primary)', padding: '40px 16px' }}>
+      <div style={{ maxWidth: '640px', margin: '0 auto' }} className="animate-fade-in-up">
 
-        <div className="p-4 bg-white rounded shadow">
-          <dl>
+        <h1 style={{ fontSize: '2rem', fontWeight: 800, marginBottom: '8px' }}>
+          Admin <span className="gradient-text">Profile</span>
+        </h1>
+        <p style={{ color: 'var(--text-secondary)', marginBottom: '32px' }}>
+          Manage your account settings and Telegram notifications.
+        </p>
+
+        <div className="glass-panel" style={{ padding: '24px', marginBottom: '24px' }}>
+          <h2 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '16px' }}>Account Details</h2>
+          <div style={{ display: 'grid', gap: '16px' }}>
             <div>
-              <dt className="text-sm text-slate-500">Email</dt>
-              <dd className="text-sm font-medium">{profile?.email || session.user.email}</dd>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>Email Address</div>
+              <div style={{ fontSize: '1rem', fontWeight: 500 }}>{profile?.email || session.user.email}</div>
             </div>
-            <div className="mt-2">
-              <dt className="text-sm text-slate-500">User id</dt>
-              <dd className="text-sm font-mono text-xs">{profile?.id}</dd>
+            <div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', marginBottom: '4px' }}>Admin ID</div>
+              <div style={{ fontSize: '0.9rem', fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>{profile?.id || userId}</div>
             </div>
-          </dl>
+          </div>
         </div>
 
         <TelegramLinkClient deepLink={deepLink} telegramChatId={profile?.telegram_chat_id} />
+
       </div>
     </main>
   );

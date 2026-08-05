@@ -1,55 +1,43 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { MapContainer, TileLayer, CircleMarker, Popup, useMap, Marker } from "react-leaflet";
+import { useEffect, useState, useRef } from "react";
+import { MapContainer, TileLayer, CircleMarker, Popup, Marker, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
-// Responsive marker component that scales with zoom level
-function ResponsiveCircleMarker({ lat, lng, urgency, color, children }) {
-  const map = useMap();
-  const [radius, setRadius] = useState(getNormalizedRadius(urgency, map.getZoom()));
+// Fix standard Leaflet icon paths in Next.js
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png",
+  iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png",
+  shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png",
+});
 
-  useEffect(() => {
-    const handleZoom = () => {
-      setRadius(getNormalizedRadius(urgency, map.getZoom()));
-    };
-
-    map.on("zoom", handleZoom);
-    return () => map.off("zoom", handleZoom);
-  }, [map, urgency]);
-
-  return (
-    <CircleMarker
-      center={[lat, lng]}
-      radius={radius}
-      pathOptions={{
-        color: "#ffffff",
-        fillColor: color,
-        fillOpacity: 0.85,
-        weight: 2,
-      }}
-    >
-      {children}
-    </CircleMarker>
-  );
-}
-
-// Calculate responsive radius based on zoom level
 function getNormalizedRadius(urgency, zoom) {
   const baseRadius = Math.max(8, urgency * 3);
-  const zoomFactor = zoom / 14; // 14 is default zoom
-  return Math.max(5, baseRadius * zoomFactor);
+  const zoomFactor = zoom / 14;
+  return Math.max(6, baseRadius * zoomFactor);
 }
 
-
-// Helper component to auto-fit map bounds when grievances load or change count
-function ChangeView({ markers }) {
+function ChangeView({ markers, selectedId }) {
   const map = useMap();
 
   useEffect(() => {
     if (!markers || markers.length === 0) return;
 
+    if (selectedId) {
+      const selected = markers.find(m => m.id === selectedId);
+      if (selected) {
+        const lat = parseFloat(selected.latitude ?? selected.lat);
+        const lng = parseFloat(selected.longitude ?? selected.lng);
+        if (!isNaN(lat) && !isNaN(lng)) {
+          map.flyTo([lat, lng], 16, { duration: 1.5 });
+          return;
+        }
+      }
+    }
+
+    // Otherwise fit all
     const validCoords = markers
       .map((item) => {
         const lat = parseFloat(item.latitude ?? item.lat);
@@ -65,32 +53,26 @@ function ChangeView({ markers }) {
         map.fitBounds(validCoords, { padding: [50, 50], maxZoom: 16 });
       }
     }
-  }, [markers?.length, map]);
+  }, [markers, map, selectedId]);
 
   return null;
 }
 
-// Get marker color based on urgency score
-const getUrgencyColor = (urgency) => {
-  if (urgency >= 4) return "#ef4444"; // Red (High)
-  if (urgency >= 2) return "#f59e0b"; // Amber (Medium)
-  return "#10b981"; // Emerald (Low)
-};
-
-// Get status badge color
 const getStatusColor = (status) => {
-  switch (status) {
-    case "Resolved":
-      return "#10b981";
-    case "In Progress":
-      return "#f59e0b";
-    case "Pending":
-    default:
-      return "#3b82f6";
-  }
+  const s = (status || "").toLowerCase();
+  if (s === "resolved") return "#10b981"; // Emerald
+  if (s === "in progress" || s === "in_progress") return "#f59e0b"; // Amber
+  return "#f43f5e"; // Rose for Pending
 };
 
-export default function Map({ grievances = [], onStatusChange }) {
+const getStatusLabel = (status) => {
+  const s = (status || "").toLowerCase();
+  if (s === "resolved") return "Resolved";
+  if (s === "in progress" || s === "in_progress") return "In Progress";
+  return "Pending";
+};
+
+export default function Map({ grievances = [], onStatusChange, selectedId = null }) {
   const [pendingActionId, setPendingActionId] = useState(null);
   const [ClusterGroup, setClusterGroup] = useState(null);
   const defaultCenter = [22.5726, 88.3639];
@@ -105,7 +87,6 @@ export default function Map({ grievances = [], onStatusChange }) {
     }
   };
 
-  // Try to dynamically load marker cluster library; fallback gracefully when absent.
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -113,14 +94,82 @@ export default function Map({ grievances = [], onStatusChange }) {
         const mod = await import("react-leaflet-markercluster");
         const Cluster = mod.default || mod.MarkerClusterGroup || null;
         if (mounted && Cluster) setClusterGroup(() => Cluster);
-      } catch (err) {
-        // no-op: dependency may not be installed in this environment
-      }
+      } catch (err) { }
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, []);
+
+  const renderPopupContent = (item) => {
+    const urgency = Number(item.urgency_score || 1);
+    const category = item.category || "General";
+    const title = item.title || "Grievance Report";
+    const statusColor = getStatusColor(item.status);
+    const statusLabel = getStatusLabel(item.status);
+    const isPending = pendingActionId === `${item.id}-In Progress` || pendingActionId === `${item.id}-Resolved`;
+
+    return (
+      <div style={{ color: 'var(--text-primary)', padding: '2px', minWidth: '220px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+          <span style={{ fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+            {category}
+          </span>
+          <span style={{
+            fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: '12px',
+            background: 'rgba(244, 63, 94, 0.1)', color: '#fb7185', border: '1px solid rgba(244, 63, 94, 0.2)',
+          }}>
+            URGENCY {urgency}/5
+          </span>
+        </div>
+
+        <h4 style={{ margin: '0 0 6px 0', fontSize: '1rem', fontWeight: 700, color: '#fff' }}>{title}</h4>
+
+        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '12px', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+          {item.description || "No description"}
+        </div>
+
+        {item.image_url && (
+          <div style={{ marginBottom: '12px', borderRadius: '8px', overflow: 'hidden', border: '1px solid rgba(148,163,184,0.1)' }}>
+            <img src={item.image_url} alt="Proof" style={{ width: '100%', height: '120px', objectFit: 'cover', display: 'block' }} />
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', padding: '8px', borderRadius: '8px', background: 'rgba(15,23,42,0.6)' }}>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Status</span>
+          <span style={{ fontSize: '0.75rem', fontWeight: 700, color: statusColor }}>{statusLabel}</span>
+        </div>
+
+        {onStatusChange && statusLabel !== 'Resolved' && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+            {statusLabel === 'Pending' && (
+              <button
+                disabled={isPending}
+                onClick={(e) => { e.stopPropagation(); handleStatusClick(item, "In Progress"); }}
+                style={{
+                  padding: '6px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600,
+                  background: 'rgba(245, 158, 11, 0.1)', color: '#fbbf24', border: '1px solid rgba(245, 158, 11, 0.3)',
+                  cursor: isPending ? 'not-allowed' : 'pointer', opacity: isPending ? 0.6 : 1
+                }}
+              >
+                In Progress
+              </button>
+            )}
+            <button
+              disabled={isPending}
+              onClick={(e) => { e.stopPropagation(); handleStatusClick(item, "Resolved"); }}
+              style={{
+                gridColumn: statusLabel === 'In Progress' ? 'span 2' : 'span 1',
+                padding: '6px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600,
+                background: 'rgba(16, 185, 129, 0.1)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.3)',
+                cursor: isPending ? 'not-allowed' : 'pointer', opacity: isPending ? 0.6 : 1
+              }}
+            >
+              Resolve
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const renderMarkers = () => {
     if (ClusterGroup) {
@@ -133,52 +182,30 @@ export default function Map({ grievances = [], onStatusChange }) {
             if (isNaN(lat) || isNaN(lng)) return null;
 
             const urgency = Number(item.urgency_score || 1);
-            const color = getUrgencyColor(urgency);
-            const category = item.category || "General";
-            const title = item.title || "Grievance Report";
-            const isTelegram = String(item.user_id || "").length > 0;
-            const currentStatus = item.status || "Pending";
-            const isPending = pendingActionId === `${item.id}-In Progress` || pendingActionId === `${item.id}-Resolved`;
+            const color = getStatusColor(item.status);
+            const isSelected = selectedId === item.id;
+
+            // Highlight selected marker with ring
+            const markerHtml = `
+              <div style="
+                width:20px;height:20px;border-radius:50%;background:${color};
+                border:2px solid #fff;box-shadow:0 0 15px ${color};
+                ${isSelected ? `transform: scale(1.3); outline: 3px solid rgba(255,255,255,0.7);` : ''}
+                transition: transform 0.2s ease;
+              "></div>
+            `;
 
             const icon = L.divIcon({
               className: "custom-div-icon",
-              html: `<div style="width:18px;height:18px;border-radius:50%;background:${color};border:2px solid #fff;"></div>`,
-              iconSize: [18, 18],
-              iconAnchor: [9, 9],
+              html: markerHtml,
+              iconSize: [20, 20],
+              iconAnchor: [10, 10],
             });
 
             return (
               <Marker key={item.id || `m-${index}`} position={[lat, lng]} icon={icon}>
-                <Popup className="custom-popup">
-                  <div className="p-1 min-w-[200px] max-w-[240px] text-slate-800/85">
-                    <div className="flex items-center justify-between gap-2 mb-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">{category}</span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded text-white" style={{ backgroundColor: color }}>Urgency: {urgency}/5</span>
-                    </div>
-                    <h4 className="font-bold text-sm leading-tight text-slate-900 mb-1">{title}</h4>
-                    <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed mb-2">{item.description || "No description provided."}</p>
-                    <div className="my-2 rounded-md overflow-hidden border border-slate-200 bg-slate-100/80 p-0.5">
-                      {item.image_url ? (
-                        <a href={item.image_url} target="_blank" rel="noopener noreferrer"><img src={item.image_url} alt="Grievance Proof" style={{ width: "100%", height: "120px", objectFit: "cover", display: "block" }} /></a>
-                      ) : (
-                        <div className="text-[10px] text-center text-slate-400 py-3 italic">No photo attached</div>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                      <span className="text-[10px] uppercase tracking-wide font-semibold text-slate-500">Status:</span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded text-white/95" style={{ backgroundColor: getStatusColor(currentStatus) }}>{currentStatus}</span>
-                    </div>
-                    <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
-                      <span>Source: {isTelegram ? "Telegram Bot" : "Web Portal"}</span>
-                      {item.created_at && (<span>{new Date(item.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>)}
-                    </div>
-                    {onStatusChange && (
-                      <div className="mt-3 grid grid-cols-2 gap-2">
-                        <button type="button" disabled={isPending} onClick={() => handleStatusClick(item, "In Progress")} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60">{isPending && pendingActionId === `${item.id}-In Progress` ? "Updating..." : "In Progress"}</button>
-                        <button type="button" disabled={isPending} onClick={() => handleStatusClick(item, "Resolved")} className="rounded-md border border-emerald-500 bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-60">{isPending && pendingActionId === `${item.id}-Resolved` ? "Updating..." : "Resolve"}</button>
-                      </div>
-                    )}
-                  </div>
+                <Popup className="custom-popup" closeButton={false}>
+                  {renderPopupContent(item)}
                 </Popup>
               </Marker>
             );
@@ -187,87 +214,53 @@ export default function Map({ grievances = [], onStatusChange }) {
       );
     }
 
-    // default (no cluster)
     return grievances.map((item, index) => {
       const lat = parseFloat(item.latitude ?? item.lat);
       const lng = parseFloat(item.longitude ?? item.lng);
-
       if (isNaN(lat) || isNaN(lng)) return null;
 
       const urgency = Number(item.urgency_score || 1);
-      const color = getUrgencyColor(urgency);
-      const category = item.category || "General";
-      const title = item.title || "Grievance Report";
-      const isTelegram = String(item.user_id || "").length > 0;
-      const currentStatus = item.status || "Pending";
-      const isPending = pendingActionId === `${item.id}-In Progress` || pendingActionId === `${item.id}-Resolved`;
+      const color = getStatusColor(item.status);
 
       return (
-        <ResponsiveCircleMarker
+        <CircleMarker
           key={item.id || `marker-${lat}-${lng}-${index}`}
-          lat={lat}
-          lng={lng}
-          urgency={urgency}
-          color={color}
+          center={[lat, lng]}
+          radius={getNormalizedRadius(urgency, 14)}
+          pathOptions={{
+            color: selectedId === item.id ? "#ffffff" : color,
+            fillColor: color,
+            fillOpacity: 0.9,
+            weight: selectedId === item.id ? 3 : 2,
+          }}
         >
-          <Popup className="custom-popup">
-                  <div className="p-1 min-w-[200px] max-w-[240px] text-slate-800/85">
-              <div className="flex items-center justify-between gap-2 mb-1.5">
-                <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">{category}</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded text-white" style={{ backgroundColor: color }}>Urgency: {urgency}/5</span>
-              </div>
-
-              <h4 className="font-bold text-sm leading-tight text-slate-900 mb-1">{title}</h4>
-              <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed mb-2">{item.description || "No description provided."}</p>
-
-                    <div className="my-2 rounded-md overflow-hidden border border-slate-200 bg-slate-100/80 p-0.5">
-                {item.image_url ? (
-                  <a href={item.image_url} target="_blank" rel="noopener noreferrer"><img src={item.image_url} alt="Grievance Proof" style={{ width: "100%", height: "120px", objectFit: "cover", display: "block" }} onError={(e) => { console.error("Failed to load image from URL:", item.image_url); }} /></a>
-                ) : (
-                  <div className="text-[10px] text-center text-slate-400 py-3 italic">No photo attached</div>
-                )}
-              </div>
-
-                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <span className="text-[10px] uppercase tracking-wide font-semibold text-slate-500">Status:</span>
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded text-white/95" style={{ backgroundColor: getStatusColor(currentStatus) }}>{currentStatus}</span>
-              </div>
-
-              <div className="pt-1.5 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
-                <span>Source: {isTelegram ? "Telegram Bot" : "Web Portal"}</span>
-                {item.created_at && (<span>{new Date(item.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>)}
-              </div>
-
-              {onStatusChange && (
-                <div className="mt-3 grid grid-cols-2 gap-2">
-                  <button type="button" disabled={isPending} onClick={() => handleStatusClick(item, "In Progress")} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-1 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-60">{isPending && pendingActionId === `${item.id}-In Progress` ? "Updating..." : "In Progress"}</button>
-                  <button type="button" disabled={isPending} onClick={() => handleStatusClick(item, "Resolved")} className="rounded-md border border-emerald-500 bg-emerald-50 px-3 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-60">{isPending && pendingActionId === `${item.id}-Resolved` ? "Updating..." : "Resolve"}</button>
-                </div>
-              )}
-            </div>
+          <Popup className="custom-popup" closeButton={false}>
+            {renderPopupContent(item)}
           </Popup>
-        </ResponsiveCircleMarker>
+        </CircleMarker>
       );
     });
   };
 
   return (
-    <div className="w-full h-full min-h-[500px] relative z-0">
+    <div style={{ width: "100%", height: "100%", minHeight: "500px", position: "relative", zIndex: 0 }}>
+      {/* Dark overlay to increase contrast if needed */}
+      <div style={{ position: 'absolute', inset: 0, background: 'rgba(10,14,26,0.2)', zIndex: 400, pointerEvents: 'none' }} />
+
       <MapContainer
         key={typeof window !== "undefined" ? "leaflet-map-mounted" : "leaflet-map-init"}
         center={defaultCenter}
         zoom={14}
         scrollWheelZoom={true}
-        style={{ height: "100%", width: "100%" }}
-        className="rounded-lg shadow-inner"
+        zoomControl={false} // We can add custom zoom controls if wanted
+        style={{ height: "100%", width: "100%", background: "#0a0e1a" }}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" // Dark CartoDB
         />
 
-        <ChangeView markers={grievances} />
-
+        <ChangeView markers={grievances} selectedId={selectedId} />
         {grievances && renderMarkers()}
       </MapContainer>
     </div>
