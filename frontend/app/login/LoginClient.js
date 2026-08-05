@@ -17,14 +17,9 @@ export default function LoginClient() {
     setError("");
     setLoading(true);
     try {
-      let res;
-      if (password) {
-        res = await supabaseClient.auth.signInWithPassword({ email, password });
-      } else {
-        res = await supabaseClient.auth.signInWithOtp({ email });
-      }
+      const res = await supabaseClient.auth.signInWithPassword({ email, password });
       if (res.error) throw res.error;
-      router.push("/profile");
+      router.push("/admin");
     } catch (err) {
       setError(err?.message || String(err));
     } finally {
@@ -34,10 +29,13 @@ export default function LoginClient() {
 
   return (
     <div className="max-w-md mx-auto mt-8 p-6 bg-white rounded shadow">
-      <h2 id="login-title" className="text-xl font-semibold mb-4">Sign in / Sign up</h2>
+      <h2 id="login-title" className="text-xl font-semibold mb-4">Admin Access</h2>
+      <p className="text-sm text-gray-600 mb-4">
+        Enter the registered administrator email and password to access the admin dashboard.
+      </p>
       <form onSubmit={handleSubmit} className="space-y-4" aria-labelledby="login-title">
         <div>
-          <label htmlFor="login-email" className="block text-sm font-medium">Email</label>
+          <label htmlFor="login-email" className="block text-sm font-medium">Admin Email</label>
           <input
             id="login-email"
             name="email"
@@ -52,18 +50,19 @@ export default function LoginClient() {
         </div>
 
         <div>
-          <label htmlFor="login-password" className="block text-sm font-medium">Password (optional)</label>
+          <label htmlFor="login-password" className="block text-sm font-medium">Password</label>
           <input
             id="login-password"
             name="password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="leave empty for magic link"
+            placeholder="Enter your admin password"
             className="mt-1 block w-full border rounded px-3 py-2"
             aria-describedby="login-password-desc"
+            required
           />
-          <div id="login-password-desc" className="sr-only">Leave empty to receive a magic link via email.</div>
+          <div id="login-password-desc" className="text-xs text-gray-500">This system is restricted to administrators only.</div>
         </div>
 
         {error && <div role="alert" className="text-red-600">{error}</div>}
@@ -75,7 +74,7 @@ export default function LoginClient() {
             aria-disabled={loading}
             className="bg-blue-600 text-white px-4 py-2 rounded"
           >
-            {loading ? "Working…" : "Continue"}
+            {loading ? "Signing in…" : "Sign in"}
           </button>
           <button
             type="button"
@@ -86,7 +85,7 @@ export default function LoginClient() {
           </button>
         </div>
       </form>
-      <p className="text-xs text-gray-500 mt-4">You can sign in with password or request a magic link.</p>
+      <p className="text-xs text-gray-500 mt-4">Only approved administrators can access this system.</p>
     </div>
   );
 }
