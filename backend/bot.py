@@ -197,41 +197,63 @@ async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_
         payload["image_url"] = image_url
 
     try:
-        import httpx
+        # Import the shared AI triage logic directly to avoid HTTP network issues on PaaS deployments
+        from main import auto_categorize, compute_urgency_score, find_duplicate, generate_tracking_id
         
-        # We route through our own API to get AI categorization, score, and deduplication applied
-        api_url = os.getenv("API_URL", "http://127.0.0.1:8000")
+        full_text = f"{'Telegram Image Report' if image_url else 'Telegram Report'} {description}"
+        category = auto_categorize(full_text)
+        urgency = compute_urgency_score(full_text)
         
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"{api_url}/grievances",
-                json={
-                    "title": "Telegram Image Report" if image_url else "Telegram Report",
-                    "description": description,
-                    "latitude": lat,
-                    "longitude": lon,
-                    "image_url": image_url,
-                    "chat_id": str(chat_id)
-                },
-                timeout=15.0
-            )
-            resp.raise_for_status()
-            data = resp.json()
+        # Deduplication check
+        duplicate = await find_duplicate(lat, lon, description)
+        tracking_id = None
+        
+        if duplicate:
+            existing_id = duplicate["id"]
+            new_count = (duplicate.get("report_count") or 1) + 1
+            boosted_urgency = min(5, (duplicate.get("urgency_score") or 1) + (1 if new_count >= 3 else 0))
             
-        grievance_id = data.get("tracking_id", "Submitted")
-        
-        if data.get("status") == "duplicate_merged":
+            try:
+                update_result = supabase.table("grievances").update({
+                    "report_count": new_count,
+                    "urgency_score": boosted_urgency,
+                }).eq("id", existing_id).select().execute()
+                
+                updated = update_result.data[0] if update_result.data else duplicate
+                tracking_id = updated.get("tracking_id", f"#{existing_id}")
+                
+                await update.message.reply_text(
+                    f"✅ Similar report already exists and has been merged.\nTracking ID: {tracking_id}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to merge duplicate: {e}")
+                
+        # If not duplicate or merge failed, create new
+        if not tracking_id:
+            tracking_id = generate_tracking_id()
+            final_payload = {
+                "title": "Telegram Image Report" if image_url else "Telegram Report",
+                "description": description,
+                "category": category,
+                "urgency_score": urgency,
+                "latitude": lat,
+                "longitude": lon,
+                "image_url": image_url,
+                "status": "Pending",
+                "tracking_id": tracking_id,
+                "report_count": 1,
+                "chat_id": str(chat_id)
+            }
+            
+            result = supabase.table("grievances").insert(final_payload).select().execute()
+            
             await update.message.reply_text(
-                f"✅ {data.get('message', 'Similar report exists and has been merged.')}\nTracking ID: {grievance_id}"
-            )
-        else:
-            await update.message.reply_text(
-                f"✅ Grievance submitted successfully!\nTracking ID: {grievance_id}"
+                f"✅ Grievance submitted successfully!\nTracking ID: {tracking_id}"
             )
 
         asyncio.create_task(dispatch_webhook_alert({
             "event": "NEW_GRIEVANCE",
-            "grievance_id": grievance_id,
+            "grievance_id": tracking_id,
             "chat_id": chat_id,
             "description": description,
             "latitude": lat,
