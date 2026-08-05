@@ -1,12 +1,10 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useState, useRef } from "react";
 import { supabase } from "../../lib/supabase";
 import { compressImageFile } from "../../components/UploadUtils";
 
 export default function SubmitPage() {
-  const [session, setSession] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [category, setCategory] = useState("General");
@@ -29,39 +27,6 @@ export default function SubmitPage() {
     if (fileInputRef.current) fileInputRef.current.value = null;
   };
 
-  useEffect(() => {
-    let mounted = true;
-
-    const loadSession = async () => {
-      try {
-        const {
-          data: { session: currentSession },
-        } = await supabase.auth.getSession();
-        if (mounted) setSession(currentSession);
-      } catch (err) {
-        console.error("Auth session load failed:", err);
-      } finally {
-        if (mounted) setAuthLoading(false);
-      }
-    };
-
-    loadSession();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, updatedSession) => {
-      setSession(updatedSession?.session ?? null);
-    });
-
-    return () => {
-      mounted = false;
-      authListener?.subscription?.unsubscribe?.();
-    };
-  }, []);
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    setSession(null);
-    setMessage({ type: "success", text: "Signed out successfully." });
-  };
 
   const useBrowserLocation = async () => {
     setGeoStatus("Locating...");
@@ -84,11 +49,6 @@ export default function SubmitPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setMessage(null);
-    if (!session) {
-      setMessage({ type: "error", text: "Please log in before submitting a complaint." });
-      return;
-    }
-
     setSubmitting(true);
     try {
       let lat = null;
@@ -128,9 +88,7 @@ export default function SubmitPage() {
 
       const finalLat = latField ? parseFloat(latField) : (lat ?? null);
       const finalLng = lngField ? parseFloat(lngField) : (lng ?? null);
-      const userId = session?.user?.email
-        ? `web_${session.user.email}`
-        : `web_${session.user?.id}`;
+      const userId = "public_submitter";
 
       const payload = {
         user_id: userId,
@@ -192,23 +150,9 @@ export default function SubmitPage() {
 
   return (
     <main className="p-6 max-w-xl mx-auto">
-      <div className="flex justify-between items-center mb-4">
-        <div>
-          <h2 className="text-2xl font-bold">Report an Issue</h2>
-          <p className="text-sm text-slate-400">Login ensures the portal is no longer anonymous and makes your report traceable.</p>
-        </div>
-        {authLoading ? (
-          <div className="text-sm text-slate-400">Checking login...</div>
-        ) : session ? (
-          <div className="text-sm text-slate-200">
-            Signed in as <span className="font-semibold">{session.user.email || session.user.id}</span>
-            <button type="button" onClick={handleSignOut} className="ml-3 text-emerald-300 hover:text-emerald-100">Sign out</button>
-          </div>
-        ) : (
-          <div className="text-sm text-slate-200">
-            <a href="/login" className="text-emerald-300 hover:text-emerald-100">Sign in / create account</a> to submit.
-          </div>
-        )}
+      <div className="mb-4">
+        <h2 className="text-2xl font-bold">Report an Issue</h2>
+        <p className="text-sm text-slate-400">Submit your problem quickly — no login required.</p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-3 bg-slate-800/95 p-4 rounded shadow-lg text-white" aria-labelledby="report-title">
@@ -268,12 +212,10 @@ export default function SubmitPage() {
         {geoStatus && <div className="text-sm text-slate-300">{geoStatus}</div>}
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <button disabled={submitting || !session || authLoading} type="submit" className="bg-emerald-600 text-white px-4 py-2 rounded disabled:opacity-40 disabled:cursor-not-allowed">
+          <button disabled={submitting} type="submit" className="bg-emerald-600 text-white px-4 py-2 rounded disabled:opacity-40 disabled:cursor-not-allowed">
             {submitting ? "Submitting..." : "Submit Report"}
           </button>
-          <div className="text-sm text-slate-300/90">
-            {session ? "Location: will attempt browser geolocation or use manual fields above" : "Login first to enable report submission."}
-          </div>
+          <div className="text-sm text-slate-300/90">Reports can be submitted directly without signing in.</div>
         </div>
 
         {message && (
