@@ -1,96 +1,393 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
-  --background: #ffffff;
-  --foreground: #111827; /* slate-900, was #171717 — slightly better contrast */
+  --bg-primary: #0a0e1a;
+  --bg-secondary: #111827;
+  --bg-card: rgba(17, 24, 39, 0.8);
+  --bg-glass: rgba(15, 23, 42, 0.6);
+  --border-glass: rgba(148, 163, 184, 0.15);
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --accent-emerald: #10b981;
+  --accent-cyan: #06b6d4;
+  --accent-violet: #8b5cf6;
+  --accent-rose: #f43f5e;
+  --accent-amber: #f59e0b;
+  --glow-emerald: rgba(16, 185, 129, 0.3);
+  --glow-cyan: rgba(6, 182, 212, 0.2);
+  --gradient-hero: linear-gradient(135deg, #0a0e1a 0%, #1e1b4b 30%, #0f172a 60%, #064e3b 100%);
+  --gradient-accent: linear-gradient(135deg, #10b981, #06b6d4);
+  --gradient-text: linear-gradient(135deg, #10b981, #06b6d4, #8b5cf6);
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-background: var(--bg-primary);
+  --color-foreground: var(--text-primary);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
-/*
- * Intentionally NOT following prefers-color-scheme: dark.
- * None of the components in this app (Nav, cards, forms, admin table, etc.)
- * are styled with Tailwind's `dark:` variants, so letting the OS flip
- * --background/--foreground to a dark palette produced inconsistent,
- * hard-to-read combinations (dark page background behind components that
- * assume a light background). The app is pinned to one deliberate,
- * high-contrast light theme until real dark-mode styling is added.
- */
+/* Reset & Base */
+* { box-sizing: border-box; }
 
 html {
   font-size: 16px;
+  scroll-behavior: smooth;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-  line-height: 1.5;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/*
- * App-wide contrast fixes.
- * An audit of app/ and components/ found widespread use of low-contrast
- * Tailwind utilities (text-slate-300/400/500 on white or near-white
- * backgrounds, which fail WCAG AA for body text). Rather than hand-edit
- * every page, these rules override those exact utility classes with
- * darker, still-clearly-"secondary" equivalents. Because Tailwind v4's
- * generated utilities live inside a CSS @layer and these rules are
- * unlayered, they win regardless of source order.
- */
-.text-slate-300,
-.text-gray-300,
-.text-slate-400,
-.text-gray-400 {
-  color: #475569 !important; /* slate-600 — readable secondary text */
+/* Glass Panel */
+.glass-panel {
+  background: var(--bg-glass);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--border-glass);
+  border-radius: 16px;
 }
 
-.text-slate-500,
-.text-gray-500 {
-  color: #334155 !important; /* slate-700 */
+.glass-panel-sm {
+  background: var(--bg-glass);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--border-glass);
+  border-radius: 12px;
 }
 
-.placeholder-slate-400::placeholder,
-.placeholder-gray-400::placeholder {
-  color: #64748b !important; /* slate-500 — still visibly a placeholder, but legible */
+/* Gradient Text */
+.gradient-text {
+  background: var(--gradient-text);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-.border-slate-100,
-.border-gray-100 {
-  border-color: #cbd5e1 !important; /* slate-300 — visible hairline instead of near-invisible */
+.gradient-text-accent {
+  background: var(--gradient-accent);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
-.border-slate-200,
-.border-gray-200 {
-  border-color: #94a3b8 !important; /* slate-400 */
+/* Glow Effects */
+.glow-emerald {
+  box-shadow: 0 0 20px var(--glow-emerald), 0 0 60px rgba(16, 185, 129, 0.1);
 }
 
-.bg-slate-50,
-.bg-gray-50 {
-  background-color: #f1f5f9 !important; /* slate-100 — a touch more separation from white cards */
+.glow-cyan {
+  box-shadow: 0 0 20px var(--glow-cyan), 0 0 60px rgba(6, 182, 212, 0.1);
 }
 
-/* Links and interactive text need to be unmistakably tappable/clickable */
-a {
-  text-underline-offset: 2px;
+/* Animated gradient border */
+.gradient-border {
+  position: relative;
+  border: none;
+  border-radius: 16px;
+  overflow: hidden;
 }
 
-button,
-a[role="button"] {
+.gradient-border::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 1px;
+  border-radius: inherit;
+  background: var(--gradient-accent);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  pointer-events: none;
+}
+
+/* Buttons */
+.btn-primary {
+  background: var(--gradient-accent);
+  color: white;
+  font-weight: 600;
+  padding: 12px 28px;
+  border-radius: 12px;
+  border: none;
   cursor: pointer;
+  font-size: 0.95rem;
+  transition: all 0.3s ease;
+  position: relative;
+  overflow: hidden;
 }
 
-/* Stronger, consistent focus ring for keyboard users (also helps low-vision users) */
+.btn-primary:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 30px var(--glow-emerald);
+}
+
+.btn-primary:active {
+  transform: translateY(0);
+}
+
+.btn-secondary {
+  background: rgba(30, 41, 59, 0.8);
+  color: var(--text-primary);
+  font-weight: 500;
+  padding: 10px 24px;
+  border-radius: 10px;
+  border: 1px solid var(--border-glass);
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.3s ease;
+}
+
+.btn-secondary:hover {
+  background: rgba(51, 65, 85, 0.8);
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+/* Form Elements */
+.input-dark {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  width: 100%;
+  transition: all 0.3s ease;
+  outline: none;
+  font-family: var(--font-sans);
+}
+
+.input-dark:focus {
+  border-color: var(--accent-emerald);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+.input-dark::placeholder {
+  color: var(--text-muted);
+}
+
+/* Status Colors */
+.status-pending { color: #f43f5e; }
+.status-in-progress { color: #f59e0b; }
+.status-resolved { color: #10b981; }
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.status-badge-pending {
+  background: rgba(244, 63, 94, 0.15);
+  color: #fb7185;
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+.status-badge-in-progress {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.status-badge-resolved {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+/* Animations */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 15px var(--glow-emerald); }
+  50% { box-shadow: 0 0 30px var(--glow-emerald), 0 0 60px rgba(16, 185, 129, 0.15); }
+}
+
+@keyframes shimmer {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.animate-fade-in-up {
+  animation: fadeInUp 0.6s ease-out forwards;
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out forwards;
+}
+
+.animate-slide-down {
+  animation: slideDown 0.4s ease-out forwards;
+}
+
+.animate-pulse-glow {
+  animation: pulseGlow 3s ease-in-out infinite;
+}
+
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+.delay-100 { animation-delay: 0.1s; }
+.delay-200 { animation-delay: 0.2s; }
+.delay-300 { animation-delay: 0.3s; }
+.delay-400 { animation-delay: 0.4s; }
+.delay-500 { animation-delay: 0.5s; }
+
+/* Card Hover */
+.card-hover {
+  transition: all 0.3s ease;
+}
+
+.card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--text-muted);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* Focus rings */
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible {
-  outline: 2px solid #2563eb; /* blue-600 */
+  outline: 2px solid var(--accent-emerald);
   outline-offset: 2px;
+}
+
+a { text-underline-offset: 2px; }
+button, a[role="button"] { cursor: pointer; }
+
+/* Leaflet overrides for dark theme */
+.leaflet-popup-content-wrapper {
+  background: rgba(15, 23, 42, 0.95) !important;
+  backdrop-filter: blur(12px) !important;
+  border: 1px solid rgba(148, 163, 184, 0.2) !important;
+  border-radius: 12px !important;
+  color: var(--text-primary) !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5) !important;
+}
+
+.leaflet-popup-tip {
+  background: rgba(15, 23, 42, 0.95) !important;
+}
+
+.leaflet-popup-close-button {
+  color: var(--text-secondary) !important;
+}
+
+/* Drag and drop zone */
+.drop-zone {
+  border: 2px dashed rgba(148, 163, 184, 0.3);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.4);
+  padding: 32px;
+  text-align: center;
+  transition: all 0.3s ease;
+  cursor: pointer;
+}
+
+.drop-zone:hover,
+.drop-zone.drag-over {
+  border-color: var(--accent-emerald);
+  background: rgba(16, 185, 129, 0.05);
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
+}
+
+/* Timeline */
+.timeline-step {
+  position: relative;
+  padding-left: 36px;
+}
+
+.timeline-step::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 24px;
+  bottom: -12px;
+  width: 2px;
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.timeline-step:last-child::before {
+  display: none;
+}
+
+.timeline-dot {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(148, 163, 184, 0.3);
+  background: var(--bg-primary);
+}
+
+.timeline-dot.active {
+  border-color: var(--accent-emerald);
+  background: var(--accent-emerald);
+  box-shadow: 0 0 10px var(--glow-emerald);
+}
+
+.timeline-dot.completed {
+  border-color: var(--accent-emerald);
+  background: var(--accent-emerald);
 }
