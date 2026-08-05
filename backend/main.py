@@ -285,39 +285,11 @@ async def _keep_alive_ping(app_url: str):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for bot subprocess and keep-alive."""
-    bot_path = backend_dir / "bot.py"
+    """Lifespan context manager for keep-alive."""
     app.state.bot_process = None
-
-    if bot_path.exists():
-        python_exe = sys.executable or "python"
-        cmd = [python_exe, "-u", str(bot_path)]
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(backend_dir)
-
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(backend_dir),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env=env,
-                text=True,
-                bufsize=1
-            )
-            app.state.bot_process = proc
-
-            out_thread = threading.Thread(
-                target=_stream_output,
-                args=(proc.stdout, logger.info),
-                daemon=True
-            )
-            out_thread.start()
-            logger.info(f"✅ Spawned bot.py successfully (PID: {proc.pid})")
-        except Exception as exc:
-            logger.exception(f"❌ Failed to start bot.py subprocess: {exc}")
-    else:
-        logger.error(f"❌ bot.py not found at path: {bot_path}; skipping bot execution.")
+    
+    # We no longer spawn bot.py here to prevent Telegram 409 Conflict 
+    # since it is being run as a dedicated Background Worker in production.
 
     render_url = normalize_env_value(os.getenv("RENDER_EXTERNAL_URL"))
     ping_task = None
