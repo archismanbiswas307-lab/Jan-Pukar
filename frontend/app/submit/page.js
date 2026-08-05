@@ -211,9 +211,15 @@ export default function SubmitPage() {
         )}
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-3 bg-slate-800/95 p-4 rounded shadow-lg text-white">
-        <input value={title} onChange={(e)=>setTitle(e.target.value)} placeholder="Short title" className="w-full p-2 border border-slate-700 rounded bg-slate-900/60 text-white placeholder-slate-400" />
-        <textarea value={description} onChange={(e)=>setDescription(e.target.value)} placeholder="Describe the issue" className="w-full p-2 border border-slate-700 rounded h-28 bg-slate-900/60 text-white placeholder-slate-400" />
+      <form onSubmit={handleSubmit} className="space-y-3 bg-slate-800/95 p-4 rounded shadow-lg text-white" aria-labelledby="report-title">
+        <div>
+          <label htmlFor="report-title" className="sr-only">Report title</label>
+          <input id="report-title" value={title} onChange={(e)=>setTitle(e.target.value)} placeholder="Short title" className="w-full p-2 border border-slate-700 rounded bg-slate-900/60 text-white placeholder-slate-400" />
+        </div>
+        <div>
+          <label htmlFor="report-description" className="sr-only">Description</label>
+          <textarea id="report-description" value={description} onChange={(e)=>setDescription(e.target.value)} placeholder="Describe the issue" className="w-full p-2 border border-slate-700 rounded h-28 bg-slate-900/60 text-white placeholder-slate-400" />
+        </div>
 
         <div className="flex gap-2">
           <select value={category} onChange={(e)=>setCategory(e.target.value)} className="p-2 border border-slate-700 rounded w-1/2 bg-slate-900/60 text-white">
@@ -234,8 +240,9 @@ export default function SubmitPage() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium">Photo (optional)</label>
-          <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFile} className="mt-1 text-sm text-slate-200" />
+          <label htmlFor="report-photo" className="block text-sm font-medium">Photo (optional)</label>
+          <input id="report-photo" ref={fileInputRef} type="file" accept="image/*" onChange={handleFile} className="mt-1 text-sm text-slate-200" aria-describedby="photo-help" />
+          <div id="photo-help" className="sr-only">Attach a photo to help illustrate the issue. Optional.</div>
           {file && (
             <div className="mt-2 flex items-center gap-2 text-sm">
               <span className="text-slate-300">{file.name}</span>
@@ -244,11 +251,20 @@ export default function SubmitPage() {
           )}
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
-          <input value={latField} onChange={(e)=>setLatField(e.target.value)} placeholder="Latitude" className="p-2 border border-slate-700 rounded bg-slate-900/60 text-white" />
-          <input value={lngField} onChange={(e)=>setLngField(e.target.value)} placeholder="Longitude" className="p-2 border border-slate-700 rounded bg-slate-900/60 text-white" />
-          <button type="button" onClick={useBrowserLocation} className="p-2 rounded bg-slate-700/70 text-white">Use browser location</button>
-        </div>
+        <fieldset className="grid grid-cols-3 gap-2" aria-describedby="location-help">
+          <div>
+            <label htmlFor="latitude" className="sr-only">Latitude</label>
+            <input id="latitude" value={latField} onChange={(e)=>setLatField(e.target.value)} placeholder="Latitude" className="p-2 border border-slate-700 rounded bg-slate-900/60 text-white" />
+          </div>
+          <div>
+            <label htmlFor="longitude" className="sr-only">Longitude</label>
+            <input id="longitude" value={lngField} onChange={(e)=>setLngField(e.target.value)} placeholder="Longitude" className="p-2 border border-slate-700 rounded bg-slate-900/60 text-white" />
+          </div>
+          <div>
+            <button type="button" onClick={useBrowserLocation} className="p-2 rounded bg-slate-700/70 text-white">Use browser location</button>
+          </div>
+        </fieldset>
+        <div id="location-help" className="sr-only">Use browser geolocation or enter latitude and longitude manually.</div>
         {geoStatus && <div className="text-sm text-slate-300">{geoStatus}</div>}
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

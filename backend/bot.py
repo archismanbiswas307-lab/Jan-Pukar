@@ -313,16 +313,24 @@ async def start_realtime_listener(bot: Bot):
 
             print(f"📊 Updated Record Data: {data}")
 
-            raw_chat_id = data.get("telegram_chat_id") or data.get("user_id")
-            if not raw_chat_id:
-                print("⚠️ No telegram_chat_id or user_id found in row update.")
-                return
+            # Prefer explicit telegram_chat_id in the row; fall back to user_id if available.
+            record = data
+            chat_id_field = record.get("telegram_chat_id")
 
-            chat_id_str = str(raw_chat_id).replace("telegram_", "")
-            try:
-                chat_id = int(chat_id_str)
-            except ValueError:
-                print(f"⚠️ Invalid Chat ID format: {chat_id_str}")
+            # Verify that chat_id exists and consists only of digits (allow negative IDs if your bot uses them)
+            chat_id = None
+            if chat_id_field is not None and str(chat_id_field).replace("-", "").isdigit():
+                chat_id = int(chat_id_field)
+            else:
+                # fall back to user_id like 'telegram_12345'
+                raw_user = record.get("user_id")
+                if raw_user and isinstance(raw_user, str) and raw_user.startswith("telegram_"):
+                    candidate = raw_user.replace("telegram_", "")
+                    if candidate.replace("-", "").isdigit():
+                        chat_id = int(candidate)
+
+            if chat_id is None:
+                print(f"⚠️ Skipped Telegram notification: No valid numeric telegram_chat_id found for record {record.get('id')}")
                 return
 
             report_id = data.get("id", "N/A")
