@@ -51,9 +51,11 @@ def normalize_env_value(value: str | None) -> str | None:
     return normalized.rstrip("/")
 
 
-supabase_url = normalize_env_value(
-    os.getenv("NEXT_PUBLIC_SUPABASE_URL") or os.getenv("SUPABASE_URL")
-)
+raw_url = os.getenv("NEXT_PUBLIC_SUPABASE_URL") or os.getenv("SUPABASE_URL") or ""
+supabase_url = normalize_env_value(raw_url)
+if supabase_url and not supabase_url.startswith("http"):
+    supabase_url = "https://" + supabase_url
+
 supabase_key = normalize_env_value(
     os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")

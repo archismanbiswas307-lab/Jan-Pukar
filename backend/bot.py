@@ -44,9 +44,12 @@ for env_path in [BASE_DIR / ".env", BASE_DIR.parent / ".env"]:
         load_dotenv(dotenv_path=env_path)
 
 TELEGRAM_BOT_TOKEN = normalize_env_value(os.getenv("TELEGRAM_BOT_TOKEN"))
-SUPABASE_URL = normalize_env_value(
-    os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
-)
+
+raw_url = os.getenv("NEXT_PUBLIC_SUPABASE_URL") or os.getenv("SUPABASE_URL") or ""
+SUPABASE_URL = normalize_env_value(raw_url)
+if SUPABASE_URL and not SUPABASE_URL.startswith("http"):
+    SUPABASE_URL = "https://" + SUPABASE_URL
+
 SUPABASE_KEY = normalize_env_value(
     os.getenv("SUPABASE_SERVICE_ROLE_KEY") 
     or os.getenv("SUPABASE_KEY") 
