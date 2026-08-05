@@ -18,6 +18,7 @@ import sys
 import threading
 import logging
 import asyncio
+import httpx
 
 # Setup Logging
 logging.basicConfig(
@@ -26,11 +27,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("janpukar.main")
 
-# Load Environment Variables
-project_root = Path(__file__).resolve().parent
-frontend_env = project_root.parent / "frontend" / ".env.local"
+# Resolve absolute paths regardless of current working directory
+backend_dir = Path(__file__).resolve().parent
+frontend_env = backend_dir.parent / "frontend" / ".env.local"
 
-load_dotenv(dotenv_path=project_root / ".env")
+load_dotenv(dotenv_path=backend_dir / ".env")
 if frontend_env.exists():
     load_dotenv(dotenv_path=frontend_env, override=True)
 
@@ -102,7 +103,7 @@ def resolve_cluster_id() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Bot Subprocess Lifespan Manager
+# Bot Subprocess & Keep-Alive Lifespan Manager
 # ---------------------------------------------------------------------------
 def _stream_output(pipe, log_func):
     """Safely stream process logs line-by-line without blocking or memory buffer leaks."""
@@ -115,22 +116,37 @@ def _stream_output(pipe, log_func):
         logger.error(f"Error reading bot process output: {e}")
 
 
+async def _keep_alive_ping(app_url: str):
+    """Background task to ping self health endpoint every 4 minutes to prevent Render sleep."""
+    await asyncio.sleep(15)  # Wait for server startup
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                resp = await client.get(f"{app_url}/health", timeout=10)
+                logger.info(f"Self-ping status: {resp.status_code}")
+            except Exception as e:
+                logger.warning(f"Self-ping failed: {e}")
+            await asyncio.sleep(240)  # Ping every 4 minutes
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager replacing deprecated @app.on_event startup/shutdown."""
-    bot_path = project_root / "bot.py"
+    bot_path = backend_dir / "bot.py"
     app.state.bot_process = None
 
     if bot_path.exists():
         python_exe = sys.executable or "python"
-        # Force unbuffered python output (-u) so logs print in real-time
         cmd = [python_exe, "-u", str(bot_path)]
+        
+        # Inject PYTHONPATH to ensure imports inside bot.py resolve cleanly
         env = os.environ.copy()
+        env["PYTHONPATH"] = str(backend_dir)
 
         try:
             proc = subprocess.Popen(
                 cmd,
-                cwd=str(project_root),
+                cwd=str(backend_dir),  # Force working directory to backend_dir
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 env=env,
@@ -139,7 +155,6 @@ async def lifespan(app: FastAPI):
             )
             app.state.bot_process = proc
 
-            # Dedicated thread to consume stdout and prevent OS pipe buffer deadlocks
             out_thread = threading.Thread(
                 target=_stream_output,
                 args=(proc.stdout, logger.info),
@@ -151,9 +166,19 @@ async def lifespan(app: FastAPI):
         except Exception as exc:
             logger.exception(f"❌ Failed to start bot.py subprocess: {exc}")
     else:
-        logger.warning(f"⚠️ bot.py not found at {bot_path}; skipping bot execution.")
+        logger.error(f"❌ bot.py not found at path: {bot_path}; skipping bot execution.")
+
+    # Start self-ping task if hosted on Render to avoid sleep mode
+    render_url = normalize_env_value(os.getenv("RENDER_EXTERNAL_URL"))
+    ping_task = None
+    if render_url:
+        ping_task = asyncio.create_task(_keep_alive_ping(render_url))
 
     yield  # Application serves requests here
+
+    # Cleanup self-ping
+    if ping_task:
+        ping_task.cancel()
 
     # Shutdown sequence
     proc = getattr(app.state, "bot_process", None)
