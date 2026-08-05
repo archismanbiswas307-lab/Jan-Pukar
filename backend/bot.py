@@ -2,9 +2,9 @@ import os
 import sys
 import logging
 import asyncio
+import io
 from datetime import datetime, timezone
 from pathlib import Path
-import math
 
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
@@ -54,15 +54,11 @@ if not TELEGRAM_BOT_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
     logger.critical("Missing required environment variables. Exiting.")
     sys.exit(1)
 
-# Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Active pending complaints: { chat_id: {"text": str, "timestamp": datetime} }
+# State Store: { chat_id: {"text": str, "image_url": str, "timestamp": datetime} }
 pending_complaints = {}
 
-# ---------------------------------------------------------------------------
-# Helper Functions
-# ---------------------------------------------------------------------------
 def validate_coordinates(lat, lon):
     try:
         lat_f, lon_f = float(lat), float(lon)
@@ -87,8 +83,8 @@ async def dispatch_webhook_alert(payload: dict):
 # ---------------------------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
-        "Welcome to JanPukar Civic Reporting Bot System System System.\n\n"
-        "Please describe the issue or complaint you would like to submit."
+        "Welcome to JanPukar Civic Reporting Bot System.\n\n"
+        "Please describe your grievance or upload a photo with a caption to get started."
     )
     await update.message.reply_text(welcome_text)
 
@@ -96,10 +92,14 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
 
-    pending_complaints[chat_id] = {
-        "text": text,
-        "timestamp": datetime.now(timezone.utc)
-    }
+    if chat_id not in pending_complaints:
+        pending_complaints[chat_id] = {
+            "text": text,
+            "image_url": None,
+            "timestamp": datetime.now(timezone.utc)
+        }
+    else:
+        pending_complaints[chat_id]["text"] = text
 
     location_keyboard = ReplyKeyboardMarkup(
         [[KeyboardButton("📍 Share Current Location", request_location=True)]],
@@ -112,12 +112,62 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         reply_markup=location_keyboard
     )
 
+async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    photo = update.message.photo[-1] # Highest resolution photo
+    caption = update.message.caption or ""
+
+    try:
+        # Download photo directly into memory
+        photo_file = await photo.get_file()
+        photo_bytes = await photo_file.download_as_bytearray()
+
+        file_name = f"grievance_{chat_id}_{int(datetime.now(timezone.utc).timestamp())}.jpg"
+        
+        # Upload photo to Supabase storage bucket 'grievance-images'
+        try:
+            supabase.storage.from_("grievance-images").upload(
+                path=file_name,
+                file=bytes(photo_bytes),
+                file_options={"content-type": "image/jpeg"}
+            )
+            image_url = f"{SUPABASE_URL}/storage/v1/object/public/grievance-images/{file_name}"
+        except Exception as storage_err:
+            logger.warning(f"Supabase storage upload failed/bypassed: {storage_err}")
+            image_url = None
+
+        if chat_id not in pending_complaints:
+            pending_complaints[chat_id] = {
+                "text": caption if caption else "Photo Report",
+                "image_url": image_url,
+                "timestamp": datetime.now(timezone.utc)
+            }
+        else:
+            pending_complaints[chat_id]["image_url"] = image_url
+            if caption:
+                pending_complaints[chat_id]["text"] = caption
+
+        location_keyboard = ReplyKeyboardMarkup(
+            [[KeyboardButton("📍 Share Current Location", request_location=True)]],
+            one_time_keyboard=True,
+            resize_keyboard=True
+        )
+
+        await update.message.reply_text(
+            "Photo received! Now, please share the location of the incident using the button below.",
+            reply_markup=location_keyboard
+        )
+
+    except Exception as e:
+        logger.error(f"Error handling photo upload: {e}", exc_info=True)
+        await update.message.reply_text("Could not process photo. Please send text description instead.")
+
 async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     location = update.message.location
 
     if chat_id not in pending_complaints:
-        await update.message.reply_text("Please describe your complaint with a text message first.")
+        await update.message.reply_text("Please send a description or photo of your complaint first.")
         return
 
     lat, lon = validate_coordinates(location.latitude, location.longitude)
@@ -126,21 +176,22 @@ async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_
         return
 
     complaint_data = pending_complaints.pop(chat_id)
-    description = complaint_data["text"]
+    description = complaint_data.get("text", "Report")
+    image_url = complaint_data.get("image_url")
+
+    payload = {
+        "chat_id": str(chat_id),
+        "description": description,
+        "latitude": lat,
+        "longitude": lon,
+        "status": "PENDING"
+    }
+
+    if image_url:
+        payload["image_url"] = image_url
 
     try:
-        # Build payload handling standard schema fields
-        payload = {
-            "chat_id": str(chat_id),
-            "description": description,
-            "latitude": lat,
-            "longitude": lon,
-            "status": "PENDING"
-        }
-
-        # Explicitly chain .select() so Supabase returns inserted record data
         response = supabase.table("grievances").insert(payload).select().execute()
-
         inserted_record = response.data[0] if (response.data and len(response.data) > 0) else {}
         grievance_id = inserted_record.get("id", "Submitted")
 
@@ -154,12 +205,13 @@ async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_
             "chat_id": chat_id,
             "description": description,
             "latitude": lat,
-            "longitude": lon
+            "longitude": lon,
+            "image_url": image_url
         }))
 
     except Exception as e:
-        logger.error(f"Error persisting grievance to Supabase: {e}", exc_info=True)
-        await update.message.reply_text("An error occurred while saving your report. Please try again later.")
+        logger.error(f"Error persisting grievance: {e}", exc_info=True)
+        await update.message.reply_text(f"An error occurred while saving your report: {str(e)[:100]}")
 
 # ---------------------------------------------------------------------------
 # Initialization & Startup
@@ -178,6 +230,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message)) # Photo Handler Added
     application.add_handler(MessageHandler(filters.LOCATION, handle_location_message))
 
     logger.info("Starting Telegram Bot Runner...")
