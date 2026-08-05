@@ -15,6 +15,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client, Client
 import os
+import subprocess
+import sys
+import threading
+import logging
 
 project_root = Path(__file__).resolve().parent
 frontend_env = project_root.parent / "frontend" / ".env.local"
@@ -111,3 +115,71 @@ async def readiness():
         "status": "ok" if cluster_id else "degraded",
         "cluster_id": cluster_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Bot process management: spawn bot.py on startup and terminate on shutdown
+# ---------------------------------------------------------------------------
+logger = logging.getLogger("janpukar.main")
+
+
+@app.on_event("startup")
+async def _startup_start_bot():
+    """Spawn backend/bot.py as a child process so the Telegram bot runs
+    alongside the FastAPI app. The child process' stdout will be streamed
+    into the main app logger for visibility.
+    """
+    bot_path = project_root / "bot.py"
+    if not bot_path.exists():
+        logger.warning("bot.py not found; skipping bot auto-start")
+        return
+
+    python_exe = sys.executable or "python"
+    env = os.environ.copy()
+
+    try:
+        proc = subprocess.Popen(
+            [python_exe, str(bot_path)],
+            cwd=str(project_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            text=True,
+            bufsize=1,
+        )
+        app.state.bot_process = proc
+
+        def _stream_proc_output(p):
+            try:
+                for line in p.stdout:
+                    if line is None:
+                        continue
+                    logger.info("[bot] %s", line.rstrip())
+            except Exception as e:
+                logger.exception("Error streaming bot output: %s", e)
+
+        t = threading.Thread(target=_stream_proc_output, args=(proc,), daemon=True)
+        t.start()
+        logger.info("Spawned bot.py (pid=%s)", getattr(proc, "pid", "?"))
+    except Exception as exc:
+        logger.exception("Failed to start bot.py as subprocess: %s", exc)
+
+
+@app.on_event("shutdown")
+async def _shutdown_stop_bot():
+    """Attempt to gracefully stop the child bot process on application shutdown."""
+    proc = getattr(app.state, "bot_process", None)
+    if not proc:
+        return
+
+    try:
+        logger.info("Terminating bot process (pid=%s)", getattr(proc, "pid", "?"))
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+            logger.info("Bot process exited cleanly")
+        except Exception:
+            logger.warning("Bot process did not exit in time; killing")
+            proc.kill()
+    except Exception as exc:
+        logger.exception("Error stopping bot process: %s", exc)
