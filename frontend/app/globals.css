@@ -2,7 +2,7 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #111827; /* slate-900, was #171717 — slightly better contrast */
 }
 
 @theme inline {
@@ -12,15 +12,85 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/*
+ * Intentionally NOT following prefers-color-scheme: dark.
+ * None of the components in this app (Nav, cards, forms, admin table, etc.)
+ * are styled with Tailwind's `dark:` variants, so letting the OS flip
+ * --background/--foreground to a dark palette produced inconsistent,
+ * hard-to-read combinations (dark page background behind components that
+ * assume a light background). The app is pinned to one deliberate,
+ * high-contrast light theme until real dark-mode styling is added.
+ */
+
+html {
+  font-size: 16px;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  line-height: 1.5;
+}
+
+/*
+ * App-wide contrast fixes.
+ * An audit of app/ and components/ found widespread use of low-contrast
+ * Tailwind utilities (text-slate-300/400/500 on white or near-white
+ * backgrounds, which fail WCAG AA for body text). Rather than hand-edit
+ * every page, these rules override those exact utility classes with
+ * darker, still-clearly-"secondary" equivalents. Because Tailwind v4's
+ * generated utilities live inside a CSS @layer and these rules are
+ * unlayered, they win regardless of source order.
+ */
+.text-slate-300,
+.text-gray-300,
+.text-slate-400,
+.text-gray-400 {
+  color: #475569 !important; /* slate-600 — readable secondary text */
+}
+
+.text-slate-500,
+.text-gray-500 {
+  color: #334155 !important; /* slate-700 */
+}
+
+.placeholder-slate-400::placeholder,
+.placeholder-gray-400::placeholder {
+  color: #64748b !important; /* slate-500 — still visibly a placeholder, but legible */
+}
+
+.border-slate-100,
+.border-gray-100 {
+  border-color: #cbd5e1 !important; /* slate-300 — visible hairline instead of near-invisible */
+}
+
+.border-slate-200,
+.border-gray-200 {
+  border-color: #94a3b8 !important; /* slate-400 */
+}
+
+.bg-slate-50,
+.bg-gray-50 {
+  background-color: #f1f5f9 !important; /* slate-100 — a touch more separation from white cards */
+}
+
+/* Links and interactive text need to be unmistakably tappable/clickable */
+a {
+  text-underline-offset: 2px;
+}
+
+button,
+a[role="button"] {
+  cursor: pointer;
+}
+
+/* Stronger, consistent focus ring for keyboard users (also helps low-vision users) */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #2563eb; /* blue-600 */
+  outline-offset: 2px;
 }

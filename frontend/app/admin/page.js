@@ -167,13 +167,15 @@ export default function AdminPage() {
     try {
       const { data, error } = await supabase
         .from("grievances")
-        .update({ status })
+        .update({ status, updated_at: new Date().toISOString() })
         .eq("id", id)
-        .select()
-        .single();
+        .select();
 
       if (error) throw error;
-      setGrievances((prev) => prev.map((item) => (item.id === id ? data : item)));
+      if (!data || data.length === 0) {
+        throw new Error(`Grievance with ID ${id} not found or could not be updated.`);
+      }
+      setGrievances((prev) => prev.map((item) => (item.id === id ? data[0] : item)));
       setError(null);
     } catch (err) {
       const message = err?.message || "Unable to update status.";

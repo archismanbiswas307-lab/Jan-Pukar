@@ -1,9 +1,19 @@
+"""
+JanPukar Telegram Bot — AUTHORITATIVE Telegram ingestion path.
+
+This is the single source of truth for consuming Telegram updates (long polling).
+Do NOT also run a Telegram webhook (e.g. backend/main.py's old /api/telegram route
+or a Next.js API route) against the same bot token at the same time — Telegram
+only allows one active consumer (webhook XOR polling) per token, and running both
+will cause 409 Conflict errors and/or duplicate grievance rows.
+"""
+
 import os
 import io
 import re
 import time
+import math
 import asyncio
-import requests
 from pathlib import Path
 from typing import Any, cast
 
@@ -12,12 +22,13 @@ try:
 except ImportError:
     load_dotenv = None
 
+import requests
 from geopy.extra.rate_limiter import RateLimiter
 from geopy.geocoders import Nominatim
 from haversine import Unit, haversine
 from supabase._async.client import create_client as create_async_client
 from telegram import Bot, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 from supabase import Client, create_client
 import smtplib
@@ -35,6 +46,7 @@ if load_dotenv:
     if (frontend_dir / ".env.local").exists():
         load_dotenv(dotenv_path=str(frontend_dir / ".env.local"), override=True)
 
+
 def normalize_env_value(value):
     if value is None:
         return None
@@ -43,11 +55,15 @@ def normalize_env_value(value):
         normalized = normalized[1:-1].strip()
     return normalized.rstrip("/")
 
+
 SUPABASE_URL = normalize_env_value(
     os.getenv("NEXT_PUBLIC_SUPABASE_URL") or os.getenv("SUPABASE_URL")
 )
 SUPABASE_KEY = normalize_env_value(
-    os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY") or os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+    or os.getenv("SUPABASE_ANON_KEY")
+    or os.getenv("SUPABASE_KEY")
 )
 DEFAULT_CLUSTER_ID = normalize_env_value(
     os.getenv("SUPABASE_CLUSTER_ID") or os.getenv("NEXT_PUBLIC_SUPABASE_CLUSTER_ID") or os.getenv("DEFAULT_CLUSTER_ID")
@@ -91,16 +107,84 @@ if SMTP_ENABLED:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 pending_complaints: dict[int, dict[str, Any]] = {}
 
-g = Nominatim(user_agent="jansamadhan-bot")
+g = Nominatim(user_agent="janpukar-bot")
 geocode = RateLimiter(g.geocode, min_delay_seconds=1)
 LOCATION_KEYWORDS = re.compile(r"\b(street|road|lane|park|station|bridge|market|circle|mall|ganj|chowk|bazar|hotel|station|metro)\b", re.I)
+
+
+# --- SHARED VALIDATION HELPERS -------------------------------------------------
+
+def parse_telegram_chat_id(value: Any) -> int | None:
+    """
+    Safely coerce a value coming from Postgres/Telegram into a valid Telegram
+    chat id (int, possibly negative for group/channel chats).
+
+    Handles:
+      - plain ints                      -> 123456789
+      - digit strings                   -> "123456789"
+      - negative ids (groups/channels)  -> "-1001234567890"
+      - numeric/float values from the DB -> "123456789.0"
+    Returns None for anything that can't be safely parsed, instead of raising.
+    """
+    if value is None:
+        return None
+
+    # Already an int (bool is a subclass of int — explicitly exclude it)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+
+    if isinstance(value, float):
+        if math.isfinite(value):
+            return int(value)
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    # Validate the sign separately from the digit body so "12-34" style
+    # malformed input never reaches int() and can't raise unexpectedly.
+    sign = ""
+    body = text
+    if body.startswith("-"):
+        sign = "-"
+        body = body[1:]
+
+    # Allow a single trailing ".0" style suffix from stringified floats.
+    if body.endswith(".0"):
+        body = body[:-2]
+
+    if body.isdigit():
+        try:
+            return int(sign + body)
+        except ValueError:
+            return None
+
+    return None
+
+
+def validate_coordinates(lat: Any, lng: Any) -> tuple[float, float] | None:
+    """Return (lat, lng) as floats if both are finite and within valid ranges, else None."""
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+    except (TypeError, ValueError):
+        return None
+
+    if not (math.isfinite(lat_f) and math.isfinite(lng_f)):
+        return None
+    if not (-90.0 <= lat_f <= 90.0):
+        return None
+    if not (-180.0 <= lng_f <= 180.0):
+        return None
+    return lat_f, lng_f
 
 
 def upload_photo_to_supabase(photo_bytes: bytes, filename: str) -> str | None:
     try:
         # Attempt to compress image server-side to save storage and bandwidth when Pillow is available
         try:
-            from PIL import Image
+            from PIL import Image # type: ignore
             from io import BytesIO
             img = Image.open(BytesIO(photo_bytes))
             out_io = BytesIO()
@@ -234,7 +318,171 @@ def update_duplicate_report(existing_id, duplicate, updated_count, updated_urgen
         print(f"⚠️ Duplicate update warning: {exc}")
 
 
-# --- UNIFIED REAL-TIME STATUS UPDATE LISTENER ---
+def link_telegram_profile(profile_id: str, chat_id: int) -> bool:
+    """Write the linked telegram_chat_id back onto the user's profile row."""
+    try:
+        result = (
+            supabase.table("profiles")
+            .update({"telegram_chat_id": chat_id})
+            .eq("id", profile_id)
+            .execute()
+        )
+        data = getattr(result, "data", None)
+        return bool(data)
+    except Exception as exc:
+        print(f"⚠️ Failed to link Telegram profile {profile_id} -> {chat_id}: {exc}")
+        return False
+
+
+# --- TELEGRAM /start ACCOUNT LINKING -------------------------------------------
+# The web app's Profile page generates a deep link of the form
+#   https://t.me/<bot_username>?start=<supabase_user_id>
+# Telegram delivers that payload as the argument to the /start command.
+async def handle_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message or not message.from_user:
+        return
+
+    chat_id = message.chat_id
+    args = context.args or []
+    profile_id = args[0].strip() if args else None
+
+    if not profile_id:
+        await message.reply_text(
+            "👋 Welcome to JanPukar! Open the *Profile* page on the JanPukar website and tap "
+            "'Open JanPukarBot' to link your Telegram account, or just share your location to "
+            "file a complaint anonymously.",
+            parse_mode="Markdown",
+        )
+        return
+
+    linked = await asyncio.to_thread(link_telegram_profile, profile_id, chat_id)
+    if linked:
+        await message.reply_text(
+            "✅ Your Telegram account is now linked to your JanPukar profile. "
+            "You'll receive status updates on your complaints here."
+        )
+    else:
+        await message.reply_text(
+            "⚠️ Couldn't link your account. Please make sure you're logged in on the JanPukar "
+            "website and try the link again from your Profile page."
+        )
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message:
+        return
+
+    text = message.text or message.caption or ""
+    image_url = None
+    user_id = message.from_user.id if message.from_user else None
+
+    if message.photo:
+        try:
+            photo_file = await message.photo[-1].get_file()
+            photo_bytes = await photo_file.download_as_bytearray()
+            filename = f"grievance_{user_id if user_id else 'anon'}_{int(time.time())}.jpg"
+            image_url = await asyncio.to_thread(upload_photo_to_supabase, bytes(photo_bytes), filename)
+        except Exception as img_err:
+            print(f"⚠️ Error processing photo: {img_err}")
+
+    raw_coords = get_location_from_message(message)
+    if not raw_coords and text:
+        raw_coords = await asyncio.to_thread(geocode_text_location, text)
+
+    coords = validate_coordinates(*raw_coords) if raw_coords else None
+    if raw_coords and not coords:
+        print(f"⚠️ Discarded out-of-range/invalid coordinates from Telegram message: {raw_coords}")
+
+    if not coords:
+        if user_id is not None:
+            existing = pending_complaints.get(user_id, {})
+            pending_complaints[user_id] = {
+                "text": text or existing.get("text", ""),
+                "image_url": image_url or existing.get("image_url", None)
+            }
+        await message.reply_text(
+            "Please share your location so I can register your complaint accurately.",
+            reply_markup=build_location_keyboard(),
+        )
+        return
+
+    lat, lng = coords
+    # Validate coordinates are finite numbers within acceptable ranges
+    validated = validate_coordinates(lat, lng)
+    if validated is None:
+        await message.reply_text(
+            "The provided location appears invalid. Please share a valid location.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+    lat, lng = validated
+
+    if user_id is not None and user_id in pending_complaints:
+        saved_data = pending_complaints.pop(user_id)
+        if not text:
+            text = saved_data.get("text", "")
+        if not image_url:
+            image_url = saved_data.get("image_url", None)
+
+    if not text:
+        venue = getattr(message, "venue", None)
+        text = venue.title if venue and getattr(venue, "title", None) else "Telegram Grievance"
+
+    category, calculated_urgency, title = analyze_grievance(text)
+
+    duplicate = await asyncio.to_thread(find_duplicate_report, lat, lng, category)
+    if duplicate:
+        existing_id = duplicate.get("id")
+        current_count = int(duplicate.get("report_count") or duplicate.get("upvote_count") or 0)
+        updated_count = current_count + 1
+        current_urgency = int(duplicate.get("urgency_score") or 1)
+        updated_urgency = min(5, max(current_urgency + 1, calculated_urgency))
+
+        await asyncio.to_thread(update_duplicate_report, existing_id, duplicate, updated_count, updated_urgency)
+
+        await message.reply_text(
+            f"⚠️ Existing {category} report found nearby! Priority updated to {updated_urgency}/5.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+        return
+
+    try:
+        raw_telegram_id = message.from_user.id if message.from_user else None
+
+        active_cluster_id = await asyncio.to_thread(resolve_cluster_id)
+
+        insert_payload = {
+            "user_id": f"telegram_{raw_telegram_id}" if raw_telegram_id else "telegram_unknown",
+            "telegram_chat_id": raw_telegram_id,
+            "title": title,
+            "description": text,
+            "category": category,
+            "latitude": lat,
+            "longitude": lng,
+            "status": "Pending",
+            "urgency_score": calculated_urgency,
+            "report_count": 1,
+            "image_url": image_url,
+        }
+
+        if active_cluster_id:
+            insert_payload["cluster_id"] = active_cluster_id
+
+        await asyncio.to_thread(supabase.table("grievances").insert(insert_payload).execute)
+        print(f"✅ Report successfully saved to Supabase (Cluster ID: {active_cluster_id}).")
+
+        await message.reply_text(
+            f"✅ Your complaint has been registered on the JanPukar Map!\n\n📌 Category: {category}\n🚨 Urgency Score: {calculated_urgency}/5",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    except Exception as e:
+        print(f"❌ Error inserting into Supabase: {e}")
+        await message.reply_text("❌ Failed to register complaint.")
+
+
+# --- UNIFIED REAL-TIME STATUS UPDATE + HIGH-URGENCY ALERT LISTENER -----------
 async def start_realtime_listener(bot: Bot):
     """Subscribes directly to Supabase realtime websocket inside the primary async loop."""
     loop = asyncio.get_running_loop()
@@ -291,95 +539,93 @@ async def start_realtime_listener(bot: Bot):
             except Exception as e:
                 print(f"❌ Email alert failed: {e}")
 
-        def status_change_handler(payload):
-            print("\n🔔 REALTIME EVENT TRIGGERED!")
-
-            # Safely extract dictionary record payload across various SDK versions
+        def extract_record(payload) -> dict:
+            """Normalize a realtime payload (dict-like or SDK object) into a plain record dict."""
             if isinstance(payload, dict):
                 inner_data = payload.get("data", {})
-                data = inner_data.get("record") or inner_data.get("new") or payload.get("record") or payload.get("new") or {}
-            else:
-                data = getattr(payload, "record", None) or getattr(payload, "new", None) or {}
-                if not data and hasattr(payload, "data"):
-                    inner_data = getattr(payload, "data", {})
-                    if isinstance(inner_data, dict):
-                        data = inner_data.get("record") or inner_data.get("new") or {}
-                    else:
-                        data = getattr(inner_data, "record", None) or getattr(inner_data, "new", None) or {}
+                return inner_data.get("record") or inner_data.get("new") or payload.get("record") or payload.get("new") or {}
 
-            if not isinstance(data, dict) or not data:
-                print("⚠️ Payload did not contain expected dictionary record:", payload)
-                return
+            data = getattr(payload, "record", None) or getattr(payload, "new", None)
+            if data:
+                return data
+            inner_data = getattr(payload, "data", None)
+            if isinstance(inner_data, dict):
+                return inner_data.get("record") or inner_data.get("new") or {}
+            if inner_data is not None:
+                return getattr(inner_data, "record", None) or getattr(inner_data, "new", None) or {}
+            return {}
 
-            print(f"📊 Updated Record Data: {data}")
+        def resolve_notification_chat_id(record: dict) -> int | None:
+            """Prefer the explicit telegram_chat_id column; fall back to the telegram_<id> user_id convention."""
+            chat_id = parse_telegram_chat_id(record.get("telegram_chat_id"))
+            if chat_id is not None:
+                return chat_id
 
-            # Prefer explicit telegram_chat_id in the row; fall back to user_id if available.
-            record = data
-            chat_id_field = record.get("telegram_chat_id")
+            raw_user = record.get("user_id")
+            if raw_user and isinstance(raw_user, str) and raw_user.startswith("telegram_"):
+                return parse_telegram_chat_id(raw_user.replace("telegram_", "", 1))
+            return None
 
-            # Verify that chat_id exists and consists only of digits (allow negative IDs if your bot uses them)
-            chat_id = None
-            if chat_id_field is not None and str(chat_id_field).replace("-", "").isdigit():
-                chat_id = int(chat_id_field)
-            else:
-                # fall back to user_id like 'telegram_12345'
-                raw_user = record.get("user_id")
-                if raw_user and isinstance(raw_user, str) and raw_user.startswith("telegram_"):
-                    candidate = raw_user.replace("telegram_", "")
-                    if candidate.replace("-", "").isdigit():
-                        chat_id = int(candidate)
+        def status_change_handler(payload):
+            try:
+                print("\n🔔 REALTIME UPDATE EVENT TRIGGERED!")
+                data = extract_record(payload)
 
-            if chat_id is None:
-                print(f"⚠️ Skipped Telegram notification: No valid numeric telegram_chat_id found for record {record.get('id')}")
-                return
+                if not isinstance(data, dict) or not data:
+                    print("⚠️ Payload did not contain expected dictionary record:", payload)
+                    return
 
-            report_id = data.get("id", "N/A")
-            status = data.get("status")
-            title = data.get("title", "Grievance Report")
+                print(f"📊 Updated Record Data: {data}")
 
-            if status == "In Progress":
-                text = (
-                    f"⚙️ *Status Update on Your Report*\n\n"
-                    f"Your complaint *'{title}'* (ID: `#{report_id}`) is now *IN PROGRESS*.\n"
-                    f"Municipal field teams have been dispatched."
+                chat_id = resolve_notification_chat_id(data)
+                if chat_id is None:
+                    print(f"⚠️ Skipped Telegram notification: No valid numeric telegram_chat_id found for record {data.get('id')}")
+                    return
+
+                report_id = data.get("id", "N/A")
+                status = data.get("status")
+                title = data.get("title", "Grievance Report")
+
+                if status == "In Progress":
+                    text = (
+                        f"⚙️ *Status Update on Your Report*\n\n"
+                        f"Your complaint *'{title}'* (ID: `#{report_id}`) is now *IN PROGRESS*.\n"
+                        f"Municipal field teams have been dispatched."
+                    )
+                elif status == "Resolved":
+                    text = (
+                        f"🎉 *Complaint Resolved!*\n\n"
+                        f"Your report *'{title}'* (ID: `#{report_id}`) has been marked as *RESOLVED* by authorities.\n"
+                        f"Thank you for helping keep the city clean and safe!"
+                    )
+                else:
+                    print(f"ℹ️ Status changed to '{status}' (Ignored for notification).")
+                    return
+
+                asyncio.run_coroutine_threadsafe(
+                    send_telegram_notification(chat_id, text), loop
                 )
-            elif status == "Resolved":
-                text = (
-                    f"🎉 *Complaint Resolved!*\n\n"
-                    f"Your report *'{title}'* (ID: `#{report_id}`) has been marked as *RESOLVED* by authorities.\n"
-                    f"Thank you for helping keep the city clean and safe!"
-                )
-            else:
-                print(f"ℹ️ Status changed to '{status}' (Ignored for notification).")
-                return
-
-            asyncio.run_coroutine_threadsafe(
-                send_telegram_notification(chat_id, text), loop
-            )
+            except Exception as exc:
+                # Never let a single malformed realtime event kill the listener.
+                print(f"❌ Unhandled error in status_change_handler: {exc}")
 
         def insert_handler(payload):
-            print("\n🔔 INSERT event received for grievances table")
-            # normalize payload to dict record similar to update handler
-            if isinstance(payload, dict):
-                inner_data = payload.get("data", {})
-                data = inner_data.get("record") or inner_data.get("new") or payload.get("record") or payload.get("new") or {}
-            else:
-                data = getattr(payload, "record", None) or getattr(payload, "new", None) or {}
-                if not data and hasattr(payload, "data"):
-                    inner_data = getattr(payload, "data", {})
-                    if isinstance(inner_data, dict):
-                        data = inner_data.get("record") or inner_data.get("new") or {}
-
-            if not isinstance(data, dict) or not data:
-                print("⚠️ Insert payload did not contain expected data:", payload)
-                return
-
             try:
-                urgency = int(data.get("urgency_score") or 0)
-            except Exception:
-                urgency = 0
+                print("\n🔔 INSERT event received for grievances table")
+                data = extract_record(payload)
 
-            if urgency >= 4:
+                if not isinstance(data, dict) or not data:
+                    print("⚠️ Insert payload did not contain expected data:", payload)
+                    return
+
+                try:
+                    urgency = int(data.get("urgency_score") or 0)
+                except Exception:
+                    urgency = 0
+
+                if urgency < 4:
+                    return
+
                 report_id = data.get("id", "N/A")
                 title = data.get("title", "Grievance Report")
                 lat = data.get("latitude")
@@ -395,22 +641,23 @@ async def start_realtime_listener(bot: Bot):
                 )
                 # Telegram admins
                 asyncio.run_coroutine_threadsafe(send_admin_alerts(admin_text), loop)
-                # Webhook admins (send structured JSON)
+
+                # Webhook admins (send structured JSON) — run in thread to avoid blocking
+                webhook_payload = {
+                    "type": "high_urgency_insert",
+                    "id": report_id,
+                    "title": title,
+                    "category": category,
+                    "urgency": urgency,
+                    "latitude": lat,
+                    "longitude": lng,
+                    "created_at": created,
+                }
                 try:
-                    payload = {
-                        "type": "high_urgency_insert",
-                        "id": report_id,
-                        "title": title,
-                        "category": category,
-                        "urgency": urgency,
-                        "latitude": lat,
-                        "longitude": lng,
-                        "created_at": created,
-                    }
-                    # run in thread to avoid blocking
-                    loop.run_in_executor(None, send_webhook_alerts, payload)
+                    loop.run_in_executor(None, send_webhook_alerts, webhook_payload)
                 except Exception as ex:
                     print(f"⚠️ Failed to queue webhook alerts: {ex}")
+
                 # Email admins
                 try:
                     subj = f"High-Urgency Report: {title} (#{report_id})"
@@ -418,12 +665,20 @@ async def start_realtime_listener(bot: Bot):
                     loop.run_in_executor(None, send_email_alert, subj, body, None)
                 except Exception as ex:
                     print(f"⚠️ Failed to queue email alerts: {ex}")
+            except Exception as exc:
+                print(f"❌ Unhandled error in insert_handler: {exc}")
 
         channel.on_postgres_changes(
             event="UPDATE",
             schema="public",
             table="grievances",
             callback=status_change_handler,
+        )
+        channel.on_postgres_changes(
+            event="INSERT",
+            schema="public",
+            table="grievances",
+            callback=insert_handler,
         )
 
         await channel.subscribe()
@@ -432,111 +687,11 @@ async def start_realtime_listener(bot: Bot):
         print(f"❌ Realtime listener failed to initialize: {exc}")
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message:
-        return
-
-    text = message.text or message.caption or ""
-    image_url = None
-    user_id = message.from_user.id if message.from_user else None
-
-    if message.photo:
-        try:
-            photo_file = await message.photo[-1].get_file()
-            photo_bytes = await photo_file.download_as_bytearray()
-            filename = f"grievance_{user_id if user_id else 'anon'}_{int(time.time())}.jpg"
-            image_url = await asyncio.to_thread(upload_photo_to_supabase, bytes(photo_bytes), filename)
-        except Exception as img_err:
-            print(f"⚠️ Error processing photo: {img_err}")
-
-    coords = get_location_from_message(message)
-    if not coords and text:
-        coords = await asyncio.to_thread(geocode_text_location, text)
-
-    if not coords:
-        if user_id is not None:
-            existing = pending_complaints.get(user_id, {})
-            pending_complaints[user_id] = {
-                "text": text or existing.get("text", ""),
-                "image_url": image_url or existing.get("image_url", None)
-            }
-        await message.reply_text(
-            "Please share your location so I can register your complaint accurately.",
-            reply_markup=build_location_keyboard(),
-        )
-        return
-
-    lat, lng = coords
-
-    if user_id is not None and user_id in pending_complaints:
-        saved_data = pending_complaints.pop(user_id)
-        if not text:
-            text = saved_data.get("text", "")
-        if not image_url:
-            image_url = saved_data.get("image_url", None)
-
-    if not text:
-        venue = getattr(message, "venue", None)
-        text = venue.title if venue and getattr(venue, "title", None) else "Telegram Grievance"
-
-    category, calculated_urgency, title = analyze_grievance(text)
-
-    duplicate = await asyncio.to_thread(find_duplicate_report, lat, lng, category)
-    if duplicate:
-        existing_id = duplicate.get("id")
-        current_count = int(duplicate.get("report_count") or duplicate.get("upvote_count") or 0)
-        updated_count = current_count + 1
-        current_urgency = int(duplicate.get("urgency_score") or 1)
-        updated_urgency = min(5, max(current_urgency + 1, calculated_urgency))
-
-        await asyncio.to_thread(update_duplicate_report, existing_id, duplicate, updated_count, updated_urgency)
-
-        await message.reply_text(
-            f"⚠️ Existing {category} report found nearby! Priority updated to {updated_urgency}/5.",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-        return
-
-    try:
-        raw_telegram_id = message.from_user.id if message.from_user else None
-        
-        active_cluster_id = await asyncio.to_thread(resolve_cluster_id)
-
-        insert_payload = {
-            "user_id": f"telegram_{raw_telegram_id}" if raw_telegram_id else "telegram_unknown",
-            "telegram_chat_id": raw_telegram_id,
-            "title": title,
-            "description": text,
-            "category": category,
-            "latitude": float(lat),
-            "longitude": float(lng),
-            "status": "Pending",
-            "urgency_score": calculated_urgency,
-            "report_count": 1,
-            "image_url": image_url,
-        }
-
-        if active_cluster_id:
-            insert_payload["cluster_id"] = active_cluster_id
-
-        await asyncio.to_thread(supabase.table("grievances").insert(insert_payload).execute)
-        print(f"✅ Report successfully saved to Supabase (Cluster ID: {active_cluster_id}).")
-
-        await message.reply_text(
-            f"✅ Your complaint has been registered on the JanSamadhan Map!\n\n📌 Category: {category}\n🚨 Urgency Score: {calculated_urgency}/5",
-            reply_markup=ReplyKeyboardRemove(),
-        )
-    except Exception as e:
-        print(f"❌ Error inserting into Supabase: {e}")
-        await message.reply_text("❌ Failed to register complaint.")
-
-
 async def main():
     print("🤖 Starting JanPukar Bot Engine...")
 
     httpx_request = HTTPXRequest(connect_timeout=20.0, read_timeout=20.0)
-    
+
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
@@ -544,6 +699,7 @@ async def main():
         .build()
     )
 
+    app.add_handler(CommandHandler("start", handle_start))
     app.add_handler(
         MessageHandler(filters.TEXT | filters.LOCATION | filters.VENUE | filters.PHOTO, handle_message)
     )

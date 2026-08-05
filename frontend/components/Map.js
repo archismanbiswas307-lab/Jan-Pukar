@@ -5,6 +5,44 @@ import { MapContainer, TileLayer, CircleMarker, Popup, useMap, Marker } from "re
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
+// Responsive marker component that scales with zoom level
+function ResponsiveCircleMarker({ lat, lng, urgency, color, children }) {
+  const map = useMap();
+  const [radius, setRadius] = useState(getNormalizedRadius(urgency, map.getZoom()));
+
+  useEffect(() => {
+    const handleZoom = () => {
+      setRadius(getNormalizedRadius(urgency, map.getZoom()));
+    };
+
+    map.on("zoom", handleZoom);
+    return () => map.off("zoom", handleZoom);
+  }, [map, urgency]);
+
+  return (
+    <CircleMarker
+      center={[lat, lng]}
+      radius={radius}
+      pathOptions={{
+        color: "#ffffff",
+        fillColor: color,
+        fillOpacity: 0.85,
+        weight: 2,
+      }}
+    >
+      {children}
+    </CircleMarker>
+  );
+}
+
+// Calculate responsive radius based on zoom level
+function getNormalizedRadius(urgency, zoom) {
+  const baseRadius = Math.max(8, urgency * 3);
+  const zoomFactor = zoom / 14; // 14 is default zoom
+  return Math.max(5, baseRadius * zoomFactor);
+}
+
+
 // Helper component to auto-fit map bounds when grievances load or change count
 function ChangeView({ markers }) {
   const map = useMap();
@@ -165,16 +203,12 @@ export default function Map({ grievances = [], onStatusChange }) {
       const isPending = pendingActionId === `${item.id}-In Progress` || pendingActionId === `${item.id}-Resolved`;
 
       return (
-        <CircleMarker
+        <ResponsiveCircleMarker
           key={item.id || `marker-${lat}-${lng}-${index}`}
-          center={[lat, lng]}
-          radius={Math.max(10, urgency * 4)}
-          pathOptions={{
-            color: "#ffffff",
-            fillColor: color,
-            fillOpacity: 0.85,
-            weight: 2,
-          }}
+          lat={lat}
+          lng={lng}
+          urgency={urgency}
+          color={color}
         >
           <Popup className="custom-popup">
                   <div className="p-1 min-w-[200px] max-w-[240px] text-slate-800/85">
@@ -212,7 +246,7 @@ export default function Map({ grievances = [], onStatusChange }) {
               )}
             </div>
           </Popup>
-        </CircleMarker>
+        </ResponsiveCircleMarker>
       );
     });
   };
