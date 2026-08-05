@@ -1,5 +1,4 @@
 import os
-import sys
 import logging
 import asyncio
 from datetime import datetime, timezone
@@ -57,12 +56,34 @@ SUPABASE_KEY = normalize_env_value(
 )
 WEBHOOK_ALERT_URL = normalize_env_value(os.getenv("WEBHOOK_ALERT_URL"))
 
-if not TELEGRAM_BOT_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
-    logger.critical("Missing required environment variables (TELEGRAM_BOT_TOKEN / SUPABASE_URL / SUPABASE_KEY). Exiting.")
-    sys.exit(1)
+supabase: Client | None = None
 
-# Initialize Supabase Client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+def missing_settings() -> list[str]:
+    """Return the server-side settings required to process Telegram updates."""
+    settings = {
+        "TELEGRAM_BOT_TOKEN": TELEGRAM_BOT_TOKEN,
+        "SUPABASE_URL": SUPABASE_URL,
+        "SUPABASE_SERVICE_ROLE_KEY": SUPABASE_KEY,
+    }
+    return [name for name, value in settings.items() if not value]
+
+
+def require_settings() -> None:
+    missing = missing_settings()
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables: " + ", ".join(missing)
+        )
+
+
+def get_supabase() -> Client:
+    """Create the client lazily so FastAPI can run without local bot settings."""
+    global supabase
+    require_settings()
+    if supabase is None:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return supabase
 
 # State Store: { chat_id: {"text": str, "image_url": str, "timestamp": datetime} }
 pending_complaints = {}
@@ -135,7 +156,7 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # Safe upload to Supabase Storage Bucket
         try:
-            supabase.storage.from_("grievance-images").upload(
+            get_supabase().storage.from_("grievance-images").upload(
                 path=file_name,
                 file=bytes(photo_bytes),
                 file_options={"content-type": "image/jpeg"}
@@ -217,7 +238,7 @@ async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_
             boosted_urgency = min(5, (duplicate.get("urgency_score") or 1) + (1 if new_count >= 3 else 0))
             
             try:
-                update_result = supabase.table("grievances").update({
+                update_result = get_supabase().table("grievances").update({
                     "report_count": new_count,
                     "urgency_score": boosted_urgency,
                 }).eq("id", existing_id).select().execute()
@@ -248,7 +269,7 @@ async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_
                 "chat_id": str(chat_id)
             }
             
-            result = supabase.table("grievances").insert(final_payload).select().execute()
+            result = get_supabase().table("grievances").insert(final_payload).select().execute()
             
             await update.message.reply_text(
                 f"✅ Grievance submitted successfully!\nTracking ID: {tracking_id}"
@@ -271,15 +292,19 @@ async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_
 # ---------------------------------------------------------------------------
 # Initialization & Startup
 # ---------------------------------------------------------------------------
-async def post_init(application: Application):
-    await application.bot.delete_webhook(drop_pending_updates=True)
-    logger.info("Webhook purged. Clean long-polling active.")
+async def prepare_polling(application: Application):
+    """Switch to polling only when this module is run as the local CLI."""
+    await application.bot.delete_webhook(drop_pending_updates=False)
+    logger.info("Webhook removed. Long polling active.")
 
-def main():
+
+def build_application() -> Application:
+    """Build the shared PTB application used by webhook and local polling modes."""
+    require_settings()
     application = (
         Application.builder()
         .token(TELEGRAM_BOT_TOKEN)
-        .post_init(post_init)
+        .post_init(prepare_polling)
         .build()
     )
 
@@ -287,6 +312,14 @@ def main():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location_message))
+    return application
+
+def main():
+    try:
+        application = build_application()
+    except RuntimeError as exc:
+        logger.critical("Telegram bot configuration error: %s", exc)
+        raise SystemExit(1) from exc
 
     logger.info("Starting Telegram Bot Runner...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)

@@ -2,11 +2,10 @@
 JanPukar backend API.
 
 Provides REST endpoints for grievance CRUD, AI triage (auto-categorization,
-urgency scoring, spatial deduplication), and manages the Telegram bot as a
-subprocess during startup.
+urgency scoring, spatial deduplication), and a Telegram webhook endpoint.
 """
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -16,12 +15,8 @@ from supabase import create_client, Client
 from pydantic import BaseModel, Field
 from typing import Optional
 import os
-import subprocess
-import sys
-import threading
+import hmac
 import logging
-import asyncio
-import httpx
 import math
 import re
 import uuid
@@ -35,11 +30,7 @@ logger = logging.getLogger("janpukar.main")
 
 # Resolve absolute paths regardless of current working directory
 backend_dir = Path(__file__).resolve().parent
-frontend_env = backend_dir.parent / "frontend" / ".env.local"
-
 load_dotenv(dotenv_path=backend_dir / ".env")
-if frontend_env.exists():
-    load_dotenv(dotenv_path=frontend_env, override=True)
 
 
 def normalize_env_value(value: str | None) -> str | None:
@@ -66,6 +57,15 @@ supabase_key = normalize_env_value(
 frontend_url = normalize_env_value(
     os.getenv("FRONTEND_URL") or os.getenv("NEXT_PUBLIC_FRONTEND_URL") or os.getenv("NEXT_PUBLIC_VERCEL_URL")
 )
+
+TELEGRAM_WEBHOOK_PATH = "/telegram/webhook"
+telegram_webhook_url = normalize_env_value(os.getenv("TELEGRAM_WEBHOOK_URL"))
+if not telegram_webhook_url:
+    render_external_url = normalize_env_value(os.getenv("RENDER_EXTERNAL_URL"))
+    if render_external_url:
+        telegram_webhook_url = f"{render_external_url}{TELEGRAM_WEBHOOK_PATH}"
+
+telegram_webhook_secret = normalize_env_value(os.getenv("TELEGRAM_WEBHOOK_SECRET"))
 
 if not supabase_url or not supabase_key:
     raise ValueError(
@@ -256,93 +256,51 @@ class GrievanceUpdate(BaseModel):
     duplicate_of: Optional[int] = None
 
 
-# ---------------------------------------------------------------------------
-# Bot Subprocess & Keep-Alive Lifespan Manager
-# ---------------------------------------------------------------------------
-def _stream_output(pipe, log_func):
-    """Safely stream process logs line-by-line."""
-    try:
-        with pipe:
-            for line in iter(pipe.readline, ''):
-                if line:
-                    log_func(f"[bot.py] {line.strip()}")
-    except Exception as e:
-        logger.error(f"Error reading bot process output: {e}")
-
-
-async def _keep_alive_ping(app_url: str):
-    """Background task to ping self health endpoint every 4 minutes."""
-    await asyncio.sleep(15)
-    async with httpx.AsyncClient() as client:
-        while True:
-            try:
-                resp = await client.get(f"{app_url}/health", timeout=10)
-                logger.info(f"Self-ping status: {resp.status_code}")
-            except Exception as e:
-                logger.warning(f"Self-ping failed: {e}")
-            await asyncio.sleep(240)
-
-
-def _run_bot_forever(bot_path: Path, env: dict, log_func):
-    """Run bot subprocess and automatically restart if it crashes (e.g. 409 Conflict during zero-downtime deploys)."""
-    python_exe = sys.executable or "python"
-    cmd = [python_exe, "-u", str(bot_path)]
-    while True:
-        try:
-            log_func("Starting bot.py subprocess...")
-            proc = subprocess.Popen(
-                cmd,
-                cwd=str(bot_path.parent),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                env=env,
-                text=True,
-                bufsize=1
-            )
-            # Stream output
-            for line in iter(proc.stdout.readline, ''):
-                if line:
-                    log_func(f"[bot.py] {line.strip()}")
-            proc.wait()
-            log_func(f"Bot subprocess exited with code {proc.returncode}. Restarting in 15 seconds...")
-        except Exception as e:
-            log_func(f"Exception in bot runner loop: {e}")
-            
-        import time
-        time.sleep(15)
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for keep-alive."""
-    app.state.bot_process = None
-    
-    bot_path = backend_dir / "bot.py"
-    if bot_path.exists():
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(backend_dir)
-        threading.Thread(target=_run_bot_forever, args=(bot_path, env, logger.info), daemon=True).start()
-        logger.info("Bot auto-restart thread initialized.")
+    """Own one webhook-capable Telegram application for this API process."""
+    app.state.telegram_application = None
+    app.state.telegram_webhook_ready = False
 
-    render_url = normalize_env_value(os.getenv("RENDER_EXTERNAL_URL"))
-    ping_task = None
-    if render_url:
-        ping_task = asyncio.create_task(_keep_alive_ping(render_url))
+    if telegram_webhook_url:
+        if not telegram_webhook_url.startswith("https://"):
+            raise RuntimeError("TELEGRAM_WEBHOOK_URL must use HTTPS.")
+        if not telegram_webhook_secret:
+            raise RuntimeError(
+                "TELEGRAM_WEBHOOK_SECRET is required when TELEGRAM_WEBHOOK_URL is set."
+            )
+
+        from bot import build_application
+
+        telegram_application = build_application()
+        try:
+            await telegram_application.initialize()
+            await telegram_application.start()
+            await telegram_application.bot.set_webhook(
+                url=telegram_webhook_url,
+                secret_token=telegram_webhook_secret,
+            )
+        except Exception:
+            if telegram_application.running:
+                await telegram_application.stop()
+            await telegram_application.shutdown()
+            raise
+
+        app.state.telegram_application = telegram_application
+        app.state.telegram_webhook_ready = True
+        logger.info("Telegram webhook registered at %s", telegram_webhook_url)
+    else:
+        logger.warning(
+            "Telegram webhook is disabled. Set TELEGRAM_WEBHOOK_URL and "
+            "TELEGRAM_WEBHOOK_SECRET in the backend service to enable it."
+        )
 
     yield
 
-    if ping_task:
-        ping_task.cancel()
-
-    proc = getattr(app.state, "bot_process", None)
-    if proc and proc.poll() is None:
-        logger.info(f"Terminating bot process (PID: {proc.pid})...")
-        proc.terminate()
-        try:
-            await asyncio.to_thread(proc.wait, timeout=5)
-            logger.info("Bot process terminated cleanly.")
-        except subprocess.TimeoutExpired:
-            logger.warning("Bot process unresponsive; sending SIGKILL...")
-            proc.kill()
+    telegram_application = getattr(app.state, "telegram_application", None)
+    if telegram_application:
+        await telegram_application.stop()
+        await telegram_application.shutdown()
 
 
 # Initialize App with Lifespan
