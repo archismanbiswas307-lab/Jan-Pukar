@@ -2,7 +2,6 @@ import os
 import sys
 import logging
 import asyncio
-import io
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -31,12 +30,13 @@ logger = logging.getLogger(__name__)
 # Environment Normalization & Loading
 # ---------------------------------------------------------------------------
 def normalize_env_value(val: str) -> str:
+    """Sanitize strings, strip quotes, spaces, and trailing slashes to prevent DNS errors."""
     if not val:
         return ""
     val = val.strip()
     if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
         val = val[1:-1].strip()
-    return val
+    return val.rstrip("/")
 
 BASE_DIR = Path(__file__).resolve().parent
 for env_path in [BASE_DIR / ".env", BASE_DIR.parent / ".env"]:
@@ -44,21 +44,29 @@ for env_path in [BASE_DIR / ".env", BASE_DIR.parent / ".env"]:
         load_dotenv(dotenv_path=env_path)
 
 TELEGRAM_BOT_TOKEN = normalize_env_value(os.getenv("TELEGRAM_BOT_TOKEN"))
-SUPABASE_URL = normalize_env_value(os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL"))
+SUPABASE_URL = normalize_env_value(
+    os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL")
+)
 SUPABASE_KEY = normalize_env_value(
-    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") 
+    or os.getenv("SUPABASE_KEY") 
+    or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 )
 WEBHOOK_ALERT_URL = normalize_env_value(os.getenv("WEBHOOK_ALERT_URL"))
 
 if not TELEGRAM_BOT_TOKEN or not SUPABASE_URL or not SUPABASE_KEY:
-    logger.critical("Missing required environment variables. Exiting.")
+    logger.critical("Missing required environment variables (TELEGRAM_BOT_TOKEN / SUPABASE_URL / SUPABASE_KEY). Exiting.")
     sys.exit(1)
 
+# Initialize Supabase Client
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # State Store: { chat_id: {"text": str, "image_url": str, "timestamp": datetime} }
 pending_complaints = {}
 
+# ---------------------------------------------------------------------------
+# Helper Functions
+# ---------------------------------------------------------------------------
 def validate_coordinates(lat, lon):
     try:
         lat_f, lon_f = float(lat), float(lon)
@@ -83,7 +91,7 @@ async def dispatch_webhook_alert(payload: dict):
 # ---------------------------------------------------------------------------
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
-        "Welcome to JanPukar Civic Reporting Bot System.\n\n"
+        "Welcome to JanPukar Civic Reporting Bot.\n\n"
         "Please describe your grievance or upload a photo with a caption to get started."
     )
     await update.message.reply_text(welcome_text)
@@ -114,17 +122,15 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    photo = update.message.photo[-1] # Highest resolution photo
+    photo = update.message.photo[-1]  # Get highest resolution image
     caption = update.message.caption or ""
 
     try:
-        # Download photo directly into memory
         photo_file = await photo.get_file()
         photo_bytes = await photo_file.download_as_bytearray()
-
         file_name = f"grievance_{chat_id}_{int(datetime.now(timezone.utc).timestamp())}.jpg"
-        
-        # Upload photo to Supabase storage bucket 'grievance-images'
+
+        # Safe upload to Supabase Storage Bucket
         try:
             supabase.storage.from_("grievance-images").upload(
                 path=file_name,
@@ -133,7 +139,7 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             image_url = f"{SUPABASE_URL}/storage/v1/object/public/grievance-images/{file_name}"
         except Exception as storage_err:
-            logger.warning(f"Supabase storage upload failed/bypassed: {storage_err}")
+            logger.warning(f"Supabase storage upload skipped/failed: {storage_err}")
             image_url = None
 
         if chat_id not in pending_complaints:
@@ -160,7 +166,7 @@ async def handle_photo_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     except Exception as e:
         logger.error(f"Error handling photo upload: {e}", exc_info=True)
-        await update.message.reply_text("Could not process photo. Please send text description instead.")
+        await update.message.reply_text("Could not process photo. Please send a text description instead.")
 
 async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -191,6 +197,7 @@ async def handle_location_message(update: Update, context: ContextTypes.DEFAULT_
         payload["image_url"] = image_url
 
     try:
+        # Chain .select() to retrieve created row
         response = supabase.table("grievances").insert(payload).select().execute()
         inserted_record = response.data[0] if (response.data and len(response.data) > 0) else {}
         grievance_id = inserted_record.get("id", "Submitted")
@@ -230,7 +237,7 @@ def main():
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message)) # Photo Handler Added
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo_message))
     application.add_handler(MessageHandler(filters.LOCATION, handle_location_message))
 
     logger.info("Starting Telegram Bot Runner...")
