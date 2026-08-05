@@ -1,0 +1,14 @@
+# Environment variable files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Python virtual environment & cache
+.venv/
+__pycache__/
+
+# Node.js dependencies & builds
+node_modules/
+.next/
